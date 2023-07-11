@@ -74,7 +74,7 @@ typedef struct {
     uint64_t freq_hz;
     chips_debug_t debug;
     uint8_t ram[8][0x4000]; // TODO: verify
-    uint8_t rom[2][0x4000]; // TODO: verify
+    uint8_t rom[0x4000];
     bool valid;
 } vg5000_t;
 
@@ -126,6 +126,7 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
 
     ef9345_init(&sys->vdp);
 
+    memcpy(sys->rom, desc->roms.vg5000_11.ptr, desc->roms.vg5000_11.size);
     _vg5000_init_memory_map(sys);
 }
 
@@ -268,7 +269,7 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src)
 static void _vg5000_init_memory_map(vg5000_t* sys) {
     mem_init(&sys->mem);
     // TODO: check memory mapping depending on the configuration
-    mem_map_rom(&sys->mem, 0, 0x0000, 0x4000, sys->rom[0]);
+    mem_map_rom(&sys->mem, 0, 0x0000, 0x4000, sys->rom);
     mem_map_ram(&sys->mem, 0, 0x4000, 0x4000, sys->ram[0]);
     mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram[1]);
     mem_map_ram(&sys->mem, 0, 0xC000, 0x4000, sys->ram[2]);
