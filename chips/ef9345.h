@@ -216,7 +216,7 @@ void ef9345_init(ef9345_t *ef9345);
 /* reset an existing ef9345 instance */
 void ef9345_reset(ef9345_t *ef9345);
 /* tick the ef9345 instance, returns the pins of the simulated ef9345 */
-uint64_t ef9345_tick(ef9345_t *ef9345);
+uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -245,7 +245,7 @@ void ef9345_reset(ef9345_t* ef9345) {
     memset(ef9345, 0, sizeof(*ef9345));
 }
 
-uint64_t ef9345_tick(ef9345_t* ef9345) {
+uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     CHIPS_ASSERT(ef9345);
 
     // update scanline
@@ -254,6 +254,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345) {
     ef9345->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
     fake_counter++;
 
+    return vdp_pins;
 }
 
 #endif // CHIPS_IMPL
