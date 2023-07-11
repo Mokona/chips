@@ -37,6 +37,7 @@ extern "C" {
 #define VG5000_SNAPSHOT_VERSION (0x0001)
 
 #define VG5000_FREQUENCY (4000000)
+#define VDP_TICKS_PER_CPU_TICK (EF9345_FREQUENCY / VG5000_FREQUENCY)
 
 // VG5000µ models
 // TODO: useful or redondant with ROM images?
@@ -57,14 +58,11 @@ typedef struct {
     } roms;
 } vg5000_desc_t;
 
-// TODO: verify how it works
-#define VG5000_FRAMEBUFFER_WIDTH (320)
-#define VG5000_FRAMEBUFFER_HEIGHT (250)
-#define VG5000_FRAMEBUFFER_SIZE (VG5000_FRAMEBUFFER_WIDTH*VG5000_FRAMEBUFFER_HEIGHT)
 
 // VG5000 emulator state
 typedef struct {
     z80_t cpu;
+    ef9345_t vdp;
     beeper_t beeper;
     vg5000_type_t type;
     uint32_t tick_count;
@@ -76,8 +74,6 @@ typedef struct {
     chips_debug_t debug;
     uint8_t ram[8][0x4000]; // TODO: verify
     uint8_t rom[2][0x4000]; // TODO: verify
-    // TODO: to replace with EF9345 framebuffer?
-    alignas(64) uint8_t fb[VG5000_FRAMEBUFFER_SIZE];
     bool valid;
 } vg5000_t;
 
@@ -127,6 +123,8 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     sys->freq_hz = VG5000_FREQUENCY;
     sys->debug = desc->debug;
 
+    ef9345_init(&sys->vdp);
+
     _vg5000_init_memory_map(sys);
 }
 
@@ -152,20 +150,20 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
     const chips_display_info_t res = {
         .frame = {
             .dim = {
-                .width = VG5000_FRAMEBUFFER_WIDTH,
-                .height = VG5000_FRAMEBUFFER_HEIGHT // TODO: take from EF9345
+                .width = sys?sys->vdp.fb_width:320,
+                .height = sys?sys->vdp.fb_height:250
             },
             .bytes_per_pixel = 1,   // TODO: verify
             .buffer = {
-                .ptr = sys?sys->fb:0,     // TODO: get from EF9345 ?
-                .size = VG5000_FRAMEBUFFER_SIZE,    // TODO: get from EF9345
+                .ptr = sys?sys->vdp.fb:0,
+                .size = sys?sys->vdp.fb_size:0,
             }
         },
         .screen = {
             .x = 0,
             .y = 0,
-            .width = VG5000_FRAMEBUFFER_WIDTH,  // TODO: get from EF9345
-            .height = VG5000_FRAMEBUFFER_HEIGHT,// TODO: get from EF9345
+            .width = sys?sys->vdp.fb_width:320,
+            .height = sys?sys->vdp.fb_height:250,
         },
         .palette = {
             .ptr = sys?(void*)palette:0,  // TODO: get from EF9345 ?
@@ -173,6 +171,7 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
         }
     };
 
+    CHIPS_ASSERT((res.frame.dim.width > 0) && (res.frame.dim.height > 0)); // Expected by gfx
     CHIPS_ASSERT(((sys == 0) && (res.frame.buffer.ptr == 0)) || ((sys != 0) && (res.frame.buffer.ptr != 0)));
     CHIPS_ASSERT(((sys == 0) && (res.palette.ptr == 0)) || ((sys != 0) && (res.palette.ptr != 0)));
 
@@ -183,11 +182,6 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
 {
     // tick the CPU
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
-
-    // TODO: tick the EF9345
-    static uint16_t fake_counter = 0;
-    sys->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
-    fake_counter++;
 
     // TODO: update beeper
     
@@ -203,6 +197,11 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
         }
     } else if (cpu_pins & Z80_IORQ) {
         // TODO: implement IRQ
+    }
+
+    // This is a shortcut, as the VDP is updating in parallel to the CPU
+    for (int vdp_update = 0; vdp_update < VDP_TICKS_PER_CPU_TICK; vdp_update++) {
+        uint64_t vdp_pins = ef9345_tick(&sys->vdp);
     }
 
     return cpu_pins;
