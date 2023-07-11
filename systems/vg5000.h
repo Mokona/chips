@@ -69,7 +69,8 @@ typedef struct {
     uint8_t blink_counter;
     kbd_t kbd;
     mem_t mem;
-    uint64_t pins;
+    uint64_t cpu_pins;
+    uint64_t vdp_pins;
     uint64_t freq_hz;
     chips_debug_t debug;
     uint8_t ram[8][0x4000]; // TODO: verify
@@ -129,10 +130,19 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
 }
 
 void vg5000_discard(vg5000_t* sys)
-{}
+{
+    CHIPS_ASSERT(sys && sys->valid);
+    sys->valid = false;
+}
 
 void vg5000_reset(vg5000_t* sys)
-{}
+{
+    CHIPS_ASSERT(sys && sys->valid);
+    sys->cpu_pins = z80_reset(&sys->cpu);
+    beeper_reset(&sys->beeper);
+    ef9345_reset(&sys->vdp);
+    _vg5000_init_memory_map(sys);
+}
 
 chips_display_info_t vg5000_display_info(vg5000_t* sys)
 {
@@ -201,7 +211,9 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
 
     // This is a shortcut, as the VDP is updating in parallel to the CPU
     for (int vdp_update = 0; vdp_update < VDP_TICKS_PER_CPU_TICK; vdp_update++) {
-        uint64_t vdp_pins = ef9345_tick(&sys->vdp);
+        uint64_t vdp_pins = ef9345_tick(&sys->vdp, sys->vdp_pins);
+
+        sys->vdp_pins = vdp_pins;
     }
 
     return cpu_pins;
@@ -211,7 +223,7 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds)
 {
     CHIPS_ASSERT(sys && sys->valid);
     uint32_t num_ticks = clk_us_to_ticks(VG5000_FREQUENCY, micro_seconds);
-    uint64_t pins = sys->pins;
+    uint64_t pins = sys->cpu_pins;
     if (0 == sys->debug.callback.func) {
         // run without debug hook
         for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
@@ -225,7 +237,7 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds)
             sys->debug.callback.func(sys->debug.callback.user_data, pins);
         }
     }
-    sys->pins = pins;
+    sys->cpu_pins = pins;
     kbd_update(&sys->kbd, micro_seconds);
     return num_ticks;
 
@@ -238,13 +250,19 @@ void vg5000_key_up(vg5000_t* sys, int key_code)
 {}
 
 bool vg5000_quickload(vg5000_t* sys, chips_range_t data)
-{}
+{
+    return false;
+}
 
 uint32_t vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst)
-{}
+{
+    return 0;
+}
 
 bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src)
-{}
+{
+    return false;
+}
 
 
 static void _vg5000_init_memory_map(vg5000_t* sys) {
