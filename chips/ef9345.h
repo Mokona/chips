@@ -48,6 +48,7 @@
 #*/
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdalign.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -148,6 +149,12 @@ extern "C" {
 #define EF9345_REG_INDIRECT_DOR (4)
 #define EF9345_REG_INDIRECT_ROR (7)
 
+#define EF9345_FRAMEBUFFER_WIDTH (320)
+#define EF9345_FRAMEBUFFER_HEIGHT (250)
+#define EF9345_FRAMEBUFFER_SIZE (EF9345_FRAMEBUFFER_WIDTH*EF9345_FRAMEBUFFER_HEIGHT)
+
+#define EF9345_FREQUENCY (12000000)    /* 12 MHz */
+
 typedef struct {
     union {
         uint8_t direct_regs[8];
@@ -177,6 +184,11 @@ typedef struct {
     };
 
     uint64_t pins;                  /* pin state after last tick */
+    uint16_t fb_width;
+    uint16_t fb_height;
+    uint32_t fb_size;
+    alignas(64) uint8_t fb[EF9345_FRAMEBUFFER_SIZE];
+
 } ef9345_t;
 
 /* helper macros to extract address and data values from pin mask */
@@ -199,6 +211,49 @@ typedef struct {
 /* set multiplexed data to ADM0-ADM7 pins */
 #define EF9345_SET_MUX_DATA(p, d) {((p) = ((p)&~EF9345_ADM0_ADM7_MASK)|(((d)&0xff)<<EF9345_PIN_ADM0));}
 
+/* initialize a new ef9345 instance */
+void ef9345_init(ef9345_t *ef9345);
+/* reset an existing ef9345 instance */
+void ef9345_reset(ef9345_t *ef9345);
+/* tick the ef9345 instance, returns the pins of the simulated ef9345 */
+uint64_t ef9345_tick(ef9345_t *ef9345);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
+
+/*-- IMPLEMENTATION ----------------------------------------------------------*/
+#ifdef CHIPS_IMPL
+#include <string.h>
+#ifndef CHIPS_ASSERT
+    #include <assert.h>
+    #define CHIPS_ASSERT(c) assert(c)
+#endif
+
+void ef9345_init(ef9345_t* ef9345) {
+    CHIPS_ASSERT(ef9345);
+    memset(ef9345, 0, sizeof(*ef9345));
+
+    ef9345->fb_width = EF9345_FRAMEBUFFER_WIDTH;
+    ef9345->fb_height = EF9345_FRAMEBUFFER_HEIGHT;
+    ef9345->fb_size = EF9345_FRAMEBUFFER_SIZE;
+
+}
+
+void ef9345_reset(ef9345_t* ef9345) {
+    CHIPS_ASSERT(ef9345);
+    memset(ef9345, 0, sizeof(*ef9345));
+}
+
+uint64_t ef9345_tick(ef9345_t* ef9345) {
+    CHIPS_ASSERT(ef9345);
+
+    // update scanline
+
+    static uint16_t fake_counter = 0;
+    ef9345->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
+    fake_counter++;
+
+}
+
+#endif // CHIPS_IMPL
