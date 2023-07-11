@@ -36,6 +36,8 @@ extern "C" {
 // bump this whenever the vg5000_t struct layout changes
 #define VG5000_SNAPSHOT_VERSION (0x0001)
 
+#define VG5000_FREQUENCY (4000000)
+
 // VG5000µ models
 // TODO: useful or redondant with ROM images?
 typedef enum {
@@ -76,6 +78,7 @@ typedef struct {
     // TODO: to replace with EF9345 framebuffer?
     alignas(64) uint8_t fb[VG5000_FRAMEBUFFER_SIZE];
     uint8_t palette[VG5000_PALETTE_SIZE];
+    bool valid;
 } vg5000_t;
 
 // initialize a new VG5000µ instance
@@ -95,7 +98,7 @@ void vg5000_key_up(vg5000_t* sys, int key_code);
 // load a VG5000µ file into the emulator
 bool vg5000_quickload(vg5000_t* sys, chips_range_t data);
 // save the VG5000µ state
-void vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst);
+uint32_t vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst);
 // load a VG5000µ state
 bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 
@@ -111,8 +114,21 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
     #define CHIPS_ASSERT(c) assert(c)
 #endif
 
+static void _vg5000_init_memory_map(vg5000_t* sys);
+
+
 void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
-{}
+{
+    CHIPS_ASSERT(sys && desc);
+    if (desc->debug.callback.func) { CHIPS_ASSERT(desc->debug.stopped); }
+
+    memset(sys, 0, sizeof(vg5000_t));
+    sys->valid = true;
+    sys->freq_hz = VG5000_FREQUENCY;
+    sys->debug = desc->debug;
+
+    _vg5000_init_memory_map(sys);
+}
 
 void vg5000_discard(vg5000_t* sys)
 {}
@@ -152,8 +168,55 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
     return res;
 }
 
+uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
+{
+    // tick the CPU
+    cpu_pins = z80_tick(&sys->cpu, cpu_pins);
+
+    // TODO: tick the EF9345
+
+    // TODO: update beeper
+    
+    if (cpu_pins & Z80_MREQ) {
+        // TODO: check memory mapping depending on the configuration
+        const uint16_t addr = Z80_GET_ADDR(cpu_pins);
+        if (cpu_pins & Z80_RD) {
+            Z80_SET_DATA(cpu_pins, mem_rd(&sys->mem, addr));
+        }
+        else if (cpu_pins & Z80_WR) {
+            // write to memory
+            mem_wr(&sys->mem, addr, Z80_GET_DATA(cpu_pins));
+        }
+    } else if (cpu_pins & Z80_IORQ) {
+        // TODO: implement IRQ
+    }
+
+    return cpu_pins;
+}
+
 uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds)
-{}
+{
+    CHIPS_ASSERT(sys && sys->valid);
+    uint32_t num_ticks = clk_us_to_ticks(VG5000_FREQUENCY, micro_seconds);
+    uint64_t pins = sys->pins;
+    if (0 == sys->debug.callback.func) {
+        // run without debug hook
+        for (uint32_t ticks = 0; ticks < num_ticks; ticks++) {
+            pins = _vg5000_tick(sys, pins);
+        }
+    }
+    else {
+        // run with debug hook]
+        for (uint32_t ticks = 0; (ticks < num_ticks) && !(*sys->debug.stopped); ticks++) {
+            pins = _vg5000_tick(sys, pins);
+            sys->debug.callback.func(sys->debug.callback.user_data, pins);
+        }
+    }
+    sys->pins = pins;
+    kbd_update(&sys->kbd, micro_seconds);
+    return num_ticks;
+
+}
 
 void vg5000_key_down(vg5000_t* sys, int key_code)
 {}
@@ -164,11 +227,21 @@ void vg5000_key_up(vg5000_t* sys, int key_code)
 bool vg5000_quickload(vg5000_t* sys, chips_range_t data)
 {}
 
-void vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst)
+uint32_t vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst)
 {}
 
 bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src)
 {}
+
+
+static void _vg5000_init_memory_map(vg5000_t* sys) {
+    mem_init(&sys->mem);
+    // TODO: check memory mapping depending on the configuration
+    mem_map_rom(&sys->mem, 0, 0x0000, 0x4000, sys->rom[0]);
+    mem_map_ram(&sys->mem, 0, 0x4000, 0x4000, sys->ram[0]);
+    mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram[1]);
+    mem_map_ram(&sys->mem, 0, 0xC000, 0x4000, sys->ram[2]);
+}
 
 
 #endif // CHIPS_IMPL
