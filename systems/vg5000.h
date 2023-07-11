@@ -58,8 +58,9 @@ typedef struct {
 } vg5000_desc_t;
 
 // TODO: verify how it works
-#define VG5000_FRAMEBUFFER_SIZE (320*200)
-#define VG5000_PALETTE_SIZE (16*3)
+#define VG5000_FRAMEBUFFER_WIDTH (320)
+#define VG5000_FRAMEBUFFER_HEIGHT (250)
+#define VG5000_FRAMEBUFFER_SIZE (VG5000_FRAMEBUFFER_WIDTH*VG5000_FRAMEBUFFER_HEIGHT)
 
 // VG5000 emulator state
 typedef struct {
@@ -77,7 +78,6 @@ typedef struct {
     uint8_t rom[2][0x4000]; // TODO: verify
     // TODO: to replace with EF9345 framebuffer?
     alignas(64) uint8_t fb[VG5000_FRAMEBUFFER_SIZE];
-    uint8_t palette[VG5000_PALETTE_SIZE];
     bool valid;
 } vg5000_t;
 
@@ -138,11 +138,22 @@ void vg5000_reset(vg5000_t* sys)
 
 chips_display_info_t vg5000_display_info(vg5000_t* sys)
 {
+    static const uint32_t palette[8] = {
+        0xFF000000,     // black
+        0xFF0000FF,     // red
+        0xFF00FF00,     // green
+        0xFF00FFFF,     // yellow
+        0xFFFF0000,     // blue
+        0xFFFF00FF,     // magenta
+        0xFFFFFF00,     // cyan
+        0xFFFFFFFF,     // white
+    };
+
     const chips_display_info_t res = {
         .frame = {
             .dim = {
-                .width = 320,   // TODO: verify
-                .height = 200   // TODO: verify (and take for EF9345)
+                .width = VG5000_FRAMEBUFFER_WIDTH,
+                .height = VG5000_FRAMEBUFFER_HEIGHT // TODO: take from EF9345
             },
             .bytes_per_pixel = 1,   // TODO: verify
             .buffer = {
@@ -153,12 +164,12 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
         .screen = {
             .x = 0,
             .y = 0,
-            .width = 320, // TODO: get from EF9345
-            .height = 200, // TODO: get from EF9345
+            .width = VG5000_FRAMEBUFFER_WIDTH,  // TODO: get from EF9345
+            .height = VG5000_FRAMEBUFFER_HEIGHT,// TODO: get from EF9345
         },
         .palette = {
-            .ptr = sys?sys->palette:0, // TODO: get from EF9345
-            .size = VG5000_PALETTE_SIZE // TODO: get from EF9345
+            .ptr = sys?(void*)palette:0,  // TODO: get from EF9345 ?
+            .size = sys?sizeof(palette):0 // TODO: get from EF9345
         }
     };
 
@@ -174,6 +185,9 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
 
     // TODO: tick the EF9345
+    static uint16_t fake_counter = 0;
+    sys->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
+    fake_counter++;
 
     // TODO: update beeper
     
