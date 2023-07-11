@@ -242,7 +242,7 @@ void ef9345_init(ef9345_t* ef9345) {
 
 void ef9345_reset(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
-    memset(ef9345, 0, sizeof(*ef9345));
+    ef9345_init(ef9345);
 }
 
 uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
