@@ -112,6 +112,7 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 #endif
 
 static void _vg5000_init_memory_map(vg5000_t* sys);
+static void _vg5000_init_keyboard_matrix(vg5000_t* sys);
 
 
 void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
@@ -128,6 +129,7 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
 
     memcpy(sys->rom, desc->roms.vg5000_11.ptr, desc->roms.vg5000_11.size);
     _vg5000_init_memory_map(sys);
+    _vg5000_init_keyboard_matrix(sys);
 }
 
 void vg5000_discard(vg5000_t* sys)
@@ -265,7 +267,6 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src)
     return false;
 }
 
-
 static void _vg5000_init_memory_map(vg5000_t* sys) {
     mem_init(&sys->mem);
     // TODO: check memory mapping depending on the configuration
@@ -273,6 +274,65 @@ static void _vg5000_init_memory_map(vg5000_t* sys) {
     mem_map_ram(&sys->mem, 0, 0x4000, 0x4000, sys->ram[0]);
     mem_map_ram(&sys->mem, 0, 0x8000, 0x4000, sys->ram[1]);
     mem_map_ram(&sys->mem, 0, 0xC000, 0x4000, sys->ram[2]);
+}
+
+static void _vg5000_init_keyboard_matrix(vg5000_t* sys)
+{
+    kbd_init(&sys->kbd, 1);
+    kbd_register_modifier(&sys->kbd, 0, 2, 0);
+    // kbd_register_modifier(&sys->kbd, 0, 2, 0);
+
+
+    const char* keymap =
+        /* no shift */
+       /* no shift */
+        "        "
+        "A     Q "
+        "Z:1BVCXW"
+        ";26543ES"
+        "POIUGF*/" // * -> ×
+        "987, ]0 "
+        "D <YTR+-"
+        "MLKHJN ="
+
+        // shift
+        "        "
+        "a     q "
+        "z*#bvcxw"
+        "@!%%$£\"es"
+        "poiugfx/" // / -> ÷
+        "(/&/ [) " // twice / ?
+        "d >ytr+?" // shift+ -> ?
+        "mlkhjn ^";
+
+    for (int layer = 0; layer < 2; layer++) {
+        for (int column = 0; column < 8; column++) {
+            for (int line = 0; line < 8; line++) {
+                const uint8_t c = keymap[layer*64 + column*8 + line];
+                if (c != 0x20) {
+                    kbd_register_key(&sys->kbd, c, column, line, (layer>0) ? (1<<(layer-1)) : 0);
+                }
+            }
+        }
+    }
+
+    // special keys
+    // TODO: understand and fix the key codes
+    kbd_register_key(&sys->kbd, 0x0F, 7, 0, 0); // INS
+    kbd_register_key(&sys->kbd, 0x08, 6, 0, 0); // CTRL
+    kbd_register_key(&sys->kbd, 0x0A, 5, 0, 0); // Cursor Down
+    kbd_register_key(&sys->kbd, 0x0B, 4, 0, 0); // Cursor Right
+    kbd_register_key(&sys->kbd, 0x0B, 3, 0, 0); // Cursor Left
+    kbd_register_key(&sys->kbd, 0x0B, 2, 0, 0); // ???
+    kbd_register_key(&sys->kbd, 0x09, 0, 0, 0); // LIST
+    kbd_register_key(&sys->kbd, 0x09, 6, 1, 0); // Cursor Up
+    kbd_register_key(&sys->kbd, 0x0C, 5, 1, 0); // RET
+    kbd_register_key(&sys->kbd, 0x0D, 3, 1, 0); // CAPS LOCK
+    kbd_register_key(&sys->kbd, ' ', 2, 1, 0); // ESP
+    kbd_register_key(&sys->kbd, 0x0E, 6, 6, 0); // PRT
+    kbd_register_key(&sys->kbd, 0x0E, 7, 1, 0); // EFF
+    // TODO: Add the Triangle Key
+
 }
 
 
