@@ -4,20 +4,6 @@
 
     Integrated debugging UI for vg5000.h
 
-    Do this:
-    ~~~C
-    #define CHIPS_UI_IMPL
-    ~~~
-    before you include this file in *one* C++ file to create the
-    implementation.
-
-    Optionally provide the following macros with your own implementation
-
-    ~~~C
-    CHIPS_ASSERT(c)
-    ~~~
-        your own assert macro (default: assert(c))
-
     Include the following headers (and their dependencies) before including
     ui_vg5000.h both for the declaration and implementation.
 
@@ -26,9 +12,10 @@
     - TODO: check needed dependencies
 
     - TODO: check if using zlib/libpng
+
     ## zlib/libpng license
 
-    Copyright (c) 2018 Andre Weissflog
+    Copyright (c) 2023 Sylvain Glaize
     This software is provided 'as-is', without any express or implied warranty.
     In no event will the authors be held liable for any damages arising from the
     use of this software.
@@ -42,7 +29,7 @@
         2. Altered source versions must be plainly marked as such, and must not
         be misrepresented as being the original software.
         3. This notice may not be removed or altered from any source
-        distribution.
+        distribution. 
 #*/
 #include <stdint.h>
 #include <stdbool.h>
@@ -66,6 +53,7 @@ typedef struct {
     vg5000_t* vg5000;
     ui_vg5000_boot_cb boot_cb;
     ui_z80_t cpu;
+    ui_ef9345_t vdp;
     ui_audio_t audio;
     ui_kbd_t kbd;
     ui_memmap_t memmap;
@@ -129,6 +117,7 @@ static void _ui_vg5000_draw_menu(ui_vg5000_t* ui) {
             ImGui::MenuItem("Keyboard Matrix", 0, &ui->kbd.open);
             ImGui::MenuItem("Audio Output", 0, &ui->audio.open);
             ImGui::MenuItem("Z80 CPU", 0, &ui->cpu.open);
+            ImGui::MenuItem("EF9345 VDP", 0, &ui->vdp.open);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Debug")) {
@@ -160,9 +149,15 @@ static void _ui_vg5000_draw_menu(ui_vg5000_t* ui) {
 static void _ui_vg5000_update_memmap(ui_vg5000_t* ui) {
     CHIPS_ASSERT(ui && ui->vg5000);
     ui_memmap_reset(&ui->memmap);
-    ui_memmap_layer(&ui->memmap, "System");
+    ui_memmap_layer(&ui->memmap, "ROM");
         ui_memmap_region(&ui->memmap, "ROM", 0x0000, 0x4000, true);
-        ui_memmap_region(&ui->memmap, "RAM", 0x4000, 0xFFFF, true);
+    ui_memmap_layer(&ui->memmap, "MAIN RAM");
+        ui_memmap_region(&ui->memmap, "VIDEO RAM", 0x4000, 0x4000, true);
+    // TODO: only show extended when present
+    ui_memmap_layer(&ui->memmap, "EXTENDED");
+        // TODO: dynamic when extended ROM is supported
+        ui_memmap_region(&ui->memmap, "RAM", 0x8000, 0x8000, true);
+    // TODO: make a BASIC pointer view
 }
 
 
@@ -180,7 +175,6 @@ static void _ui_vg5000_mem_write(int layer, uint16_t addr, uint8_t data, void* u
     mem_wr(&vg5000->mem, addr, data);
 }
 
-// TODO: add pins for EF9345
 static const ui_chip_pin_t _ui_vg5000_cpu_pins[] = {
     { "D0",     0,      Z80_D0 },
     { "D1",     1,      Z80_D1 },
@@ -218,6 +212,39 @@ static const ui_chip_pin_t _ui_vg5000_cpu_pins[] = {
     { "A15",    33,     Z80_A15 },
 };
 
+static const ui_chip_pin_t _ui_ef9345_vdp_pins[] = {
+    { "AD0",    0,      EF9345_MASK_AD0 },
+    { "AD1",    1,      EF9345_MASK_AD1 },
+    { "AD2",    2,      EF9345_MASK_AD2 },
+    { "AD3",    3,      EF9345_MASK_AD3 },
+    { "AD4",    4,      EF9345_MASK_AD4 },
+    { "AD5",    5,      EF9345_MASK_AD5 },
+    { "AD6",    6,      EF9345_MASK_AD6 },
+    { "AD7",    7,      EF9345_MASK_AD7 },
+    { "AS",     8,      EF9345_MASK_AS },
+    { "DS",     9,      EF9345_MASK_DS },
+    { "R/W",    10,     EF9345_MASK_RW },
+    { "PC/VS",  11,     EF9345_MASK_PC_VS },
+    { "HVS/HS", 12,     EF9345_MASK_HVS_HS },
+    { "ADM0",   13,     EF9345_MASK_ADM0 },
+    { "ADM1",   14,     EF9345_MASK_ADM1 },
+    { "ADM2",   15,     EF9345_MASK_ADM2 },
+    { "ADM3",   16,     EF9345_MASK_ADM3 },
+    { "ADM4",   17,     EF9345_MASK_ADM4 },
+    { "ADM5",   18,     EF9345_MASK_ADM5 },
+    { "ADM6",   19,     EF9345_MASK_ADM6 },
+    { "ADM7",   20,     EF9345_MASK_ADM7 },
+    { "AM8",    21,     EF9345_MASK_AM8 },
+    { "AM9",    22,     EF9345_MASK_AM9 },
+    { "AM10",   23,     EF9345_MASK_AM10 },
+    { "AM11",   24,     EF9345_MASK_AM11 },
+    { "AM12",   25,     EF9345_MASK_AM12 },
+    { "AM13",   26,     EF9345_MASK_AM13 },
+    { "OE",     27,     EF9345_MASK_OE },
+    { "WE",     28,     EF9345_MASK_WE },
+    { "ASM",    29,     EF9345_MASK_ASM },
+};
+
 
 void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
     CHIPS_ASSERT(ui && ui_desc);
@@ -249,6 +276,17 @@ void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
         UI_CHIP_INIT_DESC(&desc.chip_desc, "Z80\nCPU", 36, _ui_vg5000_cpu_pins);
         ui_z80_init(&ui->cpu, &desc);
     }
+    x += dx; y += dy;
+    {
+        ui_ef9345_desc_t desc = {0};
+        desc.title = "EF9345 VDP";
+        desc.vdp = &ui->vg5000->vdp;
+        desc.x = x;
+        desc.y = y;
+        UI_CHIP_INIT_DESC(&desc.chip_desc, "EF9345\nVDP", 30, _ui_ef9345_vdp_pins);
+        ui_ef9345_init(&ui->vdp, &desc);
+    }
+
     // TODO: add audio debug
     // x += dx; y += dy;
     // {
@@ -293,16 +331,8 @@ void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
         desc.x = x;
         desc.y = y;
         ui_memmap_init(&ui->memmap, &desc);
-        /* the memory map is static */
+        /* the memory map is static. Can be made dynamic (reading the BASIC pointers) */
         ui_memmap_layer(&ui->memmap, "System");
-        ui_memmap_region(&ui->memmap, "RAM", 0x0000, 0x3000, true);
-        ui_memmap_region(&ui->memmap, "EXT RAM", 0x3000, 0x5000, true);
-        ui_memmap_region(&ui->memmap, "VIDEO RAM", 0x8000, 0x2000, true);
-        ui_memmap_region(&ui->memmap, "IO AREA", 0xB000, 0x1000, true);
-        ui_memmap_region(&ui->memmap, "BASIC ROM 0", 0xC000, 0x1000, true);
-        ui_memmap_region(&ui->memmap, "FP ROM", 0xD000, 0x1000, true);
-        ui_memmap_region(&ui->memmap, "DOS ROM", 0xE000, 0x1000, true);
-        ui_memmap_region(&ui->memmap, "BASIC ROM 1", 0xF000, 0x1000, true);
     }
     x += dx; y += dy;
     {
@@ -325,6 +355,7 @@ void ui_vg5000_discard(ui_vg5000_t* ui) {
     CHIPS_ASSERT(ui && ui->vg5000);
     ui->vg5000 = 0;
     ui_z80_discard(&ui->cpu);
+    ui_ef9345_discard(&ui->vdp);
     // TODO: support audio
     // ui_audio_discard(&ui->audio);
     ui_kbd_discard(&ui->kbd);
@@ -346,6 +377,7 @@ void ui_vg5000_draw(ui_vg5000_t* ui) {
     // TODO: audio support
     // ui_audio_draw(&ui->audio, ui->vg5000->audio.sample_pos);
     ui_z80_draw(&ui->cpu);
+    ui_ef9345_draw(&ui->vdp);
     ui_kbd_draw(&ui->kbd);
     ui_memmap_draw(&ui->memmap);
     for (int i = 0; i < 4; i++) {
