@@ -184,16 +184,23 @@ typedef struct {
         };
     };
 
+    mem_t mem;
+
     uint64_t pins;                  /* pin state after last tick */
 
     /* Latched data by the latest AS falling edge */
     uint8_t  l_address;
     uint8_t  l_ds;
 
+    uint8_t ram[0x2000]; // Video RAM
+
+    uint16_t line_tick;
+    uint16_t current_line;
+
     uint16_t fb_width;
     uint16_t fb_height;
     uint32_t fb_size;
-    alignas(64) uint8_t fb[EF9345_FRAMEBUFFER_SIZE];
+    alignas(64) uint8_t fb[EF9345_FRAMEBUFFER_SIZE]; // TODO: extract from here and implement a "TV" surface on the vg5000. Keep pointer only here.
 
 } ef9345_t;
 
@@ -220,6 +227,7 @@ typedef struct {
 /* set multiplexed data to ADM0-ADM7 pins */
 #define EF9345_SET_MUX_DATA(p, d) {((p) = ((p)&~EF9345_ADM0_ADM7_MASK)|(((d)&0xff)<<EF9345_PIN_ADM0));}
 
+
 /* initialize a new ef9345 instance */
 void ef9345_init(ef9345_t *ef9345);
 /* reset an existing ef9345 instance */
@@ -239,6 +247,9 @@ uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
     #define CHIPS_ASSERT(c) assert(c)
 #endif
 
+static void _ef9345_init_memory_map(ef9345_t* ef9345);
+static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins);
+
 void ef9345_init(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
     memset(ef9345, 0, sizeof(*ef9345));
@@ -247,6 +258,7 @@ void ef9345_init(ef9345_t* ef9345) {
     ef9345->fb_height = EF9345_FRAMEBUFFER_HEIGHT;
     ef9345->fb_size = EF9345_FRAMEBUFFER_SIZE;
 
+    _ef9345_init_memory_map(ef9345);
 }
 
 void ef9345_reset(ef9345_t* ef9345) {
@@ -254,9 +266,58 @@ void ef9345_reset(ef9345_t* ef9345) {
     ef9345_init(ef9345);
 }
 
+// The horizontal line takes 64µs to display
+static const uint16_t tick_per_line = EF9345_FREQUENCY / 1000000 * 64;
+
+// The H Blank is set during the 10µs (for 40 char/row)
+static const uint16_t tick_hblank_start = EF9345_FREQUENCY / 1000000 * 10;
+
+
 uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     CHIPS_ASSERT(ef9345);
 
+    vdp_pins = _ef9345_external_bus_transfer(ef9345, vdp_pins);
+
+    // Beam update
+    ef9345->line_tick = (ef9345->line_tick + 1) % tick_per_line;
+
+    if (ef9345->line_tick == 0) {
+        ef9345->current_line = (ef9345->current_line + 1) % 312; // TODO: change number of lines depending on TGS
+    }
+
+    // Sets VBLANK for the two first lines
+    if (ef9345->current_line < 2) {
+        vdp_pins &= ~EF9345_MASK_PC_VS;
+    } else {
+        vdp_pins |= EF9345_MASK_PC_VS;
+    }
+
+    if (ef9345->line_tick < tick_hblank_start) {
+        vdp_pins &= ~EF9345_MASK_HVS_HS;
+    } else {
+        vdp_pins |= EF9345_MASK_HVS_HS;
+    }
+
+    // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
+    if (ef9345->current_line < 250)
+    {
+        uint32_t fake_address = (ef9345->current_line * 320) +
+                                (ef9345->line_tick * 2);
+
+        ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
+    }
+
+    ef9345->pins = vdp_pins;
+
+    return vdp_pins;
+}
+
+static void _ef9345_init_memory_map(ef9345_t* ef9345) {
+    mem_init(&ef9345->mem);
+    mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram);
+}
+
+static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins) {
     uint64_t previous_pins = ef9345->pins;
     
     // check is AS is a falling edge
@@ -270,7 +331,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
         ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
         ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
 
-        printf("AS falling edge: address=%02x, ds=%d\n", ef9345->l_address, ef9345->l_ds);
+        // printf("AS falling edge: address=%02x, ds=%d\n", ef9345->l_address, ef9345->l_ds);
     }
 
     uint8_t previous_ds = (previous_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
@@ -285,7 +346,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
         if (ef9345->l_ds != 0) { // Only Intel mode is emulated at now
             uint8_t fake_out_data = 0x00;
             EF9345_SET_MUX_DATA_ADDR(vdp_pins, fake_out_data);
-            printf("Read cycle: address=%02x, data=%02x\n", ef9345->l_address, fake_out_data);
+            // printf("Read cycle: address=%02x, data=%02x\n", ef9345->l_address, fake_out_data);
         }
     }
 
@@ -301,16 +362,9 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
         if (ef9345->l_ds != 0) {
             // Only Intel mode is emulated at now
             uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
-            printf("Write cycle: address=%02x, data=%02x\n", ef9345->l_address, data_in);
+            // printf("Write cycle: address=%02x, data=%02x\n", ef9345->l_address, data_in);
         } 
     }
-
-
-    static uint16_t fake_counter = 0;
-    ef9345->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
-    fake_counter++;
-
-    ef9345->pins = vdp_pins;
 
     return vdp_pins;
 }
