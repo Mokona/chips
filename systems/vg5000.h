@@ -69,10 +69,11 @@ typedef struct {
     kbd_t kbd;
     mem_t mem;
     uint64_t cpu_pins;
+    uint64_t vdp_pins;
     uint64_t service_bus;
     uint64_t freq_hz;
     chips_debug_t debug;
-    uint8_t ram[8][0x4000]; // TODO: verify
+    uint8_t ram[8][0x4000]; // TODO: implement extended RAM
     uint8_t rom[0x4000];
     bool valid;
 } vg5000_t;
@@ -252,7 +253,6 @@ void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64
 
 uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
 {
-    // tick the CPU
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
 
     // TODO: update beeper
@@ -273,6 +273,7 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
     uint64_t vdp_pins = sys->vdp.pins;
     _vg5000_7807_decoder(&cpu_pins, &vdp_pins, &sys->service_bus);
 
+    // Connect Z80 data bus to EF9345 data interface
     uint8_t z80_data = Z80_GET_DATA(cpu_pins);
     EF9345_SET_MUX_DATA_ADDR(vdp_pins, z80_data);
 
@@ -287,6 +288,15 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
     {
         Z80_SET_DATA(cpu_pins, EF9345_GET_MUX_DATA_ADDR(vdp_pins));
     }
+
+    uint8_t vsync = (vdp_pins & EF9345_MASK_PC_VS) >> EF9345_PIN_PC_VS;
+    if (!vsync) {
+        cpu_pins |= Z80_INT;
+    } else {
+        cpu_pins &= ~Z80_INT;
+    }
+
+    sys->vdp_pins = vdp_pins;
 
     return cpu_pins;
 }
