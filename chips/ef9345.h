@@ -4,38 +4,22 @@
 
     Header-only emulator for the Thomson EF9345 display processor.
 
-    Do this:
-    ~~~C
-    #define CHIPS_IMPL
-    ~~~
-    before you include this file in *one* C or C++ file to create the
-    implementation.
-
-    Optionally provide the following macros with your own implementation
-
-    ~~~C
-    CHIPS_ASSERT(c)
-    ~~~
-        your own assert macro (default: assert(c))
-
     ## Emulated Pins
     **********************************
     *           +----------+         *
-    *    CS/ -->|          |         *
-    *    OE/ -->|          |         *
-    *    WE/ -->|          |<-> ADM0 *
-    *   ASM/ -->|          |...      *
+    *    OE/ <--|          |         *
+    *    WE/ <--|          |<-> ADM0 *
+    *   ASM/ <--|          |...      *
     *     AS -->|          |<-> ADM7 *
-    *     DS -->|          |         *
-    *   R/W  -->|          |--> AM8  *
-    *  PC/VS <--|  EF9345  |...      *
+    *     DS -->|  EF9345  |         *
+    *    CS/ -->|          |         *
+    *    R/W -->|          |--> AM8  *
+    *  PC/VS <--|          |...      *
     * HVS/HS <--|          |--> AM13 *
     *      B <--|          |         *
-    *      G <--|          |<-- AD0  *
+    *      G <--|          |<-> AD0  *
     *      R <--|          |...      *
-    *           |          |<-- AD7  *
-    *  LPSTB -->|          |         *
-    *  RESET -->|          |         *
+    *           |          |<-> AD7  *
     *           |          |         *
     *           +----------+         *
     **********************************
@@ -43,9 +27,25 @@
     Not emulated:
     - SYNC IN: Synchro in. Always low on the VG5000µ.
     - I: external video signal.
-    - HP: video clock, 4Mhz phased with RGBI signals.
+    - HP: video clock, 4Mhz phased with RGBI signals. It normally drives the Z80.
     - CS/: is always low on the VG5000µ.
+    - R,G,B: do we really need to emulate this? Probably too fast
 
+    Copyright (c) 2023 Sylvain Glaize
+    This software is provided 'as-is', without any express or implied warranty.
+    In no event will the authors be held liable for any damages arising from the
+    use of this software.
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+        1. The origin of this software must not be misrepresented; you must not
+        claim that you wrote the original software. If you use this software in a
+        product, an acknowledgment in the product documentation would be
+        appreciated but is not required.
+        2. Altered source versions must be plainly marked as such, and must not
+        be misrepresented as being the original software.
+        3. This notice may not be removed or altered from any source
+        distribution. 
 #*/
 #include <stdint.h>
 #include <stdbool.h>
@@ -98,40 +98,40 @@ extern "C" {
 #define EF9345_PIN_R        (9)     /* red */
 
 // pin bit masks
-#define EF9345_MASK_OE      (1<<EF9345_PIN_OE)
-#define EF9345_MASK_WE      (1<<EF9345_PIN_WE)
-#define EF9345_MASK_ASM     (1<<EF9345_PIN_ASM)
-#define EF9345_MASK_HVS_HS  (1<<EF9345_PIN_HVS_HS)
-#define EF9345_MASK_PC_VS   (1<<EF9345_PIN_PC_VS)
-#define EF9345_MASK_B       (1<<EF9345_PIN_B)
-#define EF9345_MASK_G       (1<<EF9345_PIN_G)
-#define EF9345_MASK_R       (1<<EF9345_PIN_R)
-#define EF9345_MASK_AS      (1<<EF9345_PIN_AS)
-#define EF9345_MASK_DS      (1<<EF9345_PIN_DS)
-#define EF9345_MASK_RW      (1<<EF9345_PIN_RW)
-#define EF9345_MASK_AD0     (1<<EF9345_PIN_AD0)
-#define EF9345_MASK_AD1     (1<<EF9345_PIN_AD1)
-#define EF9345_MASK_AD2     (1<<EF9345_PIN_AD2)
-#define EF9345_MASK_AD3     (1<<EF9345_PIN_AD3)
-#define EF9345_MASK_AD4     (1<<EF9345_PIN_AD4)
-#define EF9345_MASK_AD5     (1<<EF9345_PIN_AD5)
-#define EF9345_MASK_AD6     (1<<EF9345_PIN_AD6)
-#define EF9345_MASK_AD7     (1<<EF9345_PIN_AD7)
-#define EF9345_MASK_CS      (1<<EF9345_PIN_CS)
-#define EF9345_MASK_AM13    (1<<EF9345_PIN_AM13)
-#define EF9345_MASK_AM12    (1<<EF9345_PIN_AM12)
-#define EF9345_MASK_AM11    (1<<EF9345_PIN_AM11)
-#define EF9345_MASK_AM10    (1<<EF9345_PIN_AM10)
-#define EF9345_MASK_AM9     (1<<EF9345_PIN_AM9)
-#define EF9345_MASK_AM8     (1<<EF9345_PIN_AM8)
-#define EF9345_MASK_ADM7    (1<<EF9345_PIN_ADM7)
-#define EF9345_MASK_ADM6    (1<<EF9345_PIN_ADM6)
-#define EF9345_MASK_ADM5    (1<<EF9345_PIN_ADM5)
-#define EF9345_MASK_ADM4    (1<<EF9345_PIN_ADM4)
-#define EF9345_MASK_ADM3    (1<<EF9345_PIN_ADM3)
-#define EF9345_MASK_ADM2    (1<<EF9345_PIN_ADM2)
-#define EF9345_MASK_ADM1    (1<<EF9345_PIN_ADM1)
-#define EF9345_MASK_ADM0    (1<<EF9345_PIN_ADM0)
+#define EF9345_MASK_OE      (1ULL<<EF9345_PIN_OE)
+#define EF9345_MASK_WE      (1ULL<<EF9345_PIN_WE)
+#define EF9345_MASK_ASM     (1ULL<<EF9345_PIN_ASM)
+#define EF9345_MASK_HVS_HS  (1ULL<<EF9345_PIN_HVS_HS)
+#define EF9345_MASK_PC_VS   (1ULL<<EF9345_PIN_PC_VS)
+#define EF9345_MASK_B       (1ULL<<EF9345_PIN_B)
+#define EF9345_MASK_G       (1ULL<<EF9345_PIN_G)
+#define EF9345_MASK_R       (1ULL<<EF9345_PIN_R)
+#define EF9345_MASK_AS      (1ULL<<EF9345_PIN_AS)
+#define EF9345_MASK_DS      (1ULL<<EF9345_PIN_DS)
+#define EF9345_MASK_RW      (1ULL<<EF9345_PIN_RW)
+#define EF9345_MASK_AD0     (1ULL<<EF9345_PIN_AD0)
+#define EF9345_MASK_AD1     (1ULL<<EF9345_PIN_AD1)
+#define EF9345_MASK_AD2     (1ULL<<EF9345_PIN_AD2)
+#define EF9345_MASK_AD3     (1ULL<<EF9345_PIN_AD3)
+#define EF9345_MASK_AD4     (1ULL<<EF9345_PIN_AD4)
+#define EF9345_MASK_AD5     (1ULL<<EF9345_PIN_AD5)
+#define EF9345_MASK_AD6     (1ULL<<EF9345_PIN_AD6)
+#define EF9345_MASK_AD7     (1ULL<<EF9345_PIN_AD7)
+#define EF9345_MASK_CS      (1ULL<<EF9345_PIN_CS)
+#define EF9345_MASK_AM13    (1ULL<<EF9345_PIN_AM13)
+#define EF9345_MASK_AM12    (1ULL<<EF9345_PIN_AM12)
+#define EF9345_MASK_AM11    (1ULL<<EF9345_PIN_AM11)
+#define EF9345_MASK_AM10    (1ULL<<EF9345_PIN_AM10)
+#define EF9345_MASK_AM9     (1ULL<<EF9345_PIN_AM9)
+#define EF9345_MASK_AM8     (1ULL<<EF9345_PIN_AM8)
+#define EF9345_MASK_ADM7    (1ULL<<EF9345_PIN_ADM7)
+#define EF9345_MASK_ADM6    (1ULL<<EF9345_PIN_ADM6)
+#define EF9345_MASK_ADM5    (1ULL<<EF9345_PIN_ADM5)
+#define EF9345_MASK_ADM4    (1ULL<<EF9345_PIN_ADM4)
+#define EF9345_MASK_ADM3    (1ULL<<EF9345_PIN_ADM3)
+#define EF9345_MASK_ADM2    (1ULL<<EF9345_PIN_ADM2)
+#define EF9345_MASK_ADM1    (1ULL<<EF9345_PIN_ADM1)
+#define EF9345_MASK_ADM0    (1ULL<<EF9345_PIN_ADM0)
 
 /* register names */
 #define EF9345_REG_DIRECT_R0    (0)
