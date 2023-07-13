@@ -41,9 +41,10 @@
     **********************************
 
     Not emulated:
-    - SYNC IN: Synchro in, to synchronize with an external video signal.
+    - SYNC IN: Synchro in. Always low on the VG5000µ.
     - I: external video signal.
     - HP: video clock, 4Mhz phased with RGBI signals.
+    - CS/: is always low on the VG5000µ.
 
 #*/
 #include <stdint.h>
@@ -184,6 +185,11 @@ typedef struct {
     };
 
     uint64_t pins;                  /* pin state after last tick */
+
+    /* Latched data by the latest AS falling edge */
+    uint8_t  l_address;
+    uint8_t  l_ds;
+
     uint16_t fb_width;
     uint16_t fb_height;
     uint32_t fb_size;
@@ -198,10 +204,13 @@ typedef struct {
 #define EF9345_AM8_AM13_MASK (EF9345_MASK_AM8 | EF9345_MASK_AM9 | EF9345_MASK_AM10 | EF9345_MASK_AM11 | EF9345_MASK_AM12 | EF9345_MASK_AM13)
 #define EF9345_ADM0_AM13_MASK (EF9345_ADM0_ADM7_MASK | EF9345_AM8_AM13_MASK)
 
+/* processor interface */
 /* extract multiplexed data/bus from AD0-AD7 pins */
 #define EF9345_GET_MUX_DATA_ADDR(p) ((uint8_t)(((p)&EF9345_AD0_AD7_MASK)>>EF9345_PIN_AD0))
 /* set multiplexed data/bus to AD0-AD7 pins */
 #define EF9345_SET_MUX_DATA_ADDR(p, d) {((p) = ((p)&~EF9345_AD0_AD7_MASK)|(((d)&0xff)<<EF9345_PIN_AD0));}
+
+/* internal memory interface */
 /* extract multiplexed address from ADM0-ADM7 and AM8-AM13 pins */
 #define EF9345_GET_MUX_ADDR(p) ((uint16_t)(((p)&EF9345_ADM0_AM13_MASK)>>EF9345_PIN_ADM0))
 /* set multiplexed address to ADM0-ADM7 and AM8-AM13 pins */
@@ -248,11 +257,60 @@ void ef9345_reset(ef9345_t* ef9345) {
 uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     CHIPS_ASSERT(ef9345);
 
-    // update scanline
+    uint64_t previous_pins = ef9345->pins;
+    
+    // check is AS is a falling edge
+    uint8_t previous_as = (previous_pins & EF9345_MASK_AS) >> EF9345_PIN_AS;
+    uint8_t current_as = (vdp_pins & EF9345_MASK_AS) >> EF9345_PIN_AS;
+    uint8_t is_as_falling_edge = previous_as && !current_as;
+    
+    if (is_as_falling_edge)
+    {
+        // latch address and data
+        ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
+        ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+
+        printf("AS falling edge: address=%02x, ds=%d\n", ef9345->l_address, ef9345->l_ds);
+    }
+
+    uint8_t previous_ds = (previous_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+    uint8_t current_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+    uint8_t is_ds_falling_edge = previous_ds && !current_ds;
+
+    // Normally when DS is low, but to avoid process it 3 times
+    // (because EF9345 is ticked 3 times per CPU cycle), I'm only
+    // considering the falling edge.)
+    if (is_ds_falling_edge) {
+        // Read cycle
+        if (ef9345->l_ds != 0) { // Only Intel mode is emulated at now
+            uint8_t fake_out_data = 0x00;
+            EF9345_SET_MUX_DATA_ADDR(vdp_pins, fake_out_data);
+            printf("Read cycle: address=%02x, data=%02x\n", ef9345->l_address, fake_out_data);
+        }
+    }
+
+    uint8_t previous_rw = (previous_pins & EF9345_MASK_RW) >> EF9345_PIN_RW;
+    uint8_t current_rw = (vdp_pins & EF9345_MASK_RW) >> EF9345_PIN_RW;
+    uint8_t is_rw_falling_edge = previous_rw && !current_rw;
+
+    // Normally when WR/ is low, but to avoid process it 3 times
+    // (because EF9345 is ticked 3 times per CPU cycle), I'm only
+    // considering the falling edge.)
+    if (is_rw_falling_edge) {
+        // Write cycle
+        if (ef9345->l_ds != 0) {
+            // Only Intel mode is emulated at now
+            uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
+            printf("Write cycle: address=%02x, data=%02x\n", ef9345->l_address, data_in);
+        } 
+    }
+
 
     static uint16_t fake_counter = 0;
     ef9345->fb[fake_counter & 0x1FFF] = (fake_counter / 4 ) & 7;
     fake_counter++;
+
+    ef9345->pins = vdp_pins;
 
     return vdp_pins;
 }
