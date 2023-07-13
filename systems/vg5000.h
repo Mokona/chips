@@ -70,7 +70,7 @@ typedef struct {
     kbd_t kbd;
     mem_t mem;
     uint64_t cpu_pins;
-    uint64_t vdp_pins;
+    uint64_t service_bus;
     uint64_t freq_hz;
     chips_debug_t debug;
     uint8_t ram[8][0x4000]; // TODO: verify
@@ -111,9 +111,15 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
     #define CHIPS_ASSERT(c) assert(c)
 #endif
 
+#define SERVICE_BUS_PIN_RKY 0
+#define SERVICE_BUS_PIN_RK7 1
+#define SERVICE_BUS_PIN_WK7 2
+#define SERVICE_BUS_MASK_RKY (1 << SERVICE_BUS_PIN_RKY)
+#define SERVICE_BUS_MASK_RK7 (1 << SERVICE_BUS_PIN_RK7)
+#define SERVICE_BUS_MASK_WK7 (1 << SERVICE_BUS_PIN_WK7)
+
 static void _vg5000_init_memory_map(vg5000_t* sys);
 static void _vg5000_init_keyboard_matrix(vg5000_t* sys);
-
 
 void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
 {
@@ -191,6 +197,60 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
     return res;
 }
 
+void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64_t * service_bus) {
+    // remember active is always high in this emulator for z80 signals
+    // signals generated from 7807 are in their physical state
+
+    // G2/ is high if either RD/ or WR/ are asserted while IORQ/ is asserted
+    uint8_t input_G2 = (((*cpu_pins & Z80_RD) >> Z80_PIN_RD) |
+                        ((*cpu_pins & Z80_WR) >> Z80_PIN_WR)) & 
+                       ((*cpu_pins & Z80_IORQ) >> Z80_PIN_IORQ);
+    input_G2 = !input_G2; // turn to physical state -> active low
+
+    // G1/ is A7
+    uint8_t input_G1 = (*cpu_pins & Z80_A7) >> Z80_PIN_A7;
+
+    // To have an output line selected, G1 must be HIGH and G2 must be LOW
+    uint8_t output;
+    if (input_G1 && !input_G2) {
+        uint8_t input_a = (*cpu_pins & Z80_A5) >> Z80_PIN_A5;
+        uint8_t input_b = (*cpu_pins & Z80_A6) >> Z80_PIN_A6;
+        uint8_t input_c = (*cpu_pins & Z80_WR) >> Z80_PIN_WR;
+        input_c = (~input_c)&1; // turn to physical state -> active low
+
+        uint8_t shift = (input_c << 2) | (input_b << 1) | input_a;
+        output = 1 << shift;    // Selected line, logic
+        output = ~output;       // Selected line, physical
+    } else {
+        output = 0xFF;
+    }
+
+    uint64_t locale_vdp_pins = *vdp_pins;
+
+    locale_vdp_pins &= ~EF9345_MASK_AS;
+    locale_vdp_pins |= (~output & 0x01) << EF9345_PIN_AS;
+
+    locale_vdp_pins &= ~EF9345_MASK_DS;
+    locale_vdp_pins |= ((output & 0x40) >> 6) << EF9345_PIN_DS;
+
+    locale_vdp_pins &= ~EF9345_MASK_RW;
+    locale_vdp_pins |= ((output & 0x04) >> 2) << EF9345_PIN_RW;
+
+    *vdp_pins = locale_vdp_pins;
+
+    uint64_t local_service_bus = *service_bus;
+    local_service_bus &= ~SERVICE_BUS_MASK_RKY;
+    local_service_bus |= ((output & 0x10) >> 4) << SERVICE_BUS_PIN_RKY;
+
+    local_service_bus &= ~SERVICE_BUS_MASK_RK7;
+    local_service_bus |= ((output & 0x20) >> 5) << SERVICE_BUS_PIN_RK7;
+
+    local_service_bus &= ~SERVICE_BUS_MASK_WK7;
+    local_service_bus |= ((output & 0x02) >> 1) << SERVICE_BUS_PIN_WK7;
+
+    *service_bus = local_service_bus;
+}
+
 uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
 {
     // tick the CPU
@@ -208,15 +268,25 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
             // write to memory
             mem_wr(&sys->mem, addr, Z80_GET_DATA(cpu_pins));
         }
-    } else if (cpu_pins & Z80_IORQ) {
-        // TODO: implement IRQ
     }
+    
+    // Decode EF9347 and K7 control signals
+    uint64_t vdp_pins = sys->vdp.pins;
+    _vg5000_7807_decoder(&cpu_pins, &vdp_pins, &sys->service_bus);
+
+    uint8_t z80_data = Z80_GET_DATA(cpu_pins);
+    EF9345_SET_MUX_DATA_ADDR(vdp_pins, z80_data);
 
     // This is a shortcut, as the VDP is updating in parallel to the CPU
     for (int vdp_update = 0; vdp_update < VDP_TICKS_PER_CPU_TICK; vdp_update++) {
-        uint64_t vdp_pins = ef9345_tick(&sys->vdp, sys->vdp_pins);
+        vdp_pins = ef9345_tick(&sys->vdp, vdp_pins);
+    }
 
-        sys->vdp_pins = vdp_pins;
+    // If read phase from the EF9345, apply the data to the Z80 data bus
+    uint8_t ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+    if (!ds)
+    {
+        Z80_SET_DATA(cpu_pins, EF9345_GET_MUX_DATA_ADDR(vdp_pins));
     }
 
     return cpu_pins;
