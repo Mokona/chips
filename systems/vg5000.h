@@ -114,9 +114,9 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 #define SERVICE_BUS_PIN_RKY 0
 #define SERVICE_BUS_PIN_RK7 1
 #define SERVICE_BUS_PIN_WK7 2
-#define SERVICE_BUS_MASK_RKY (1 << SERVICE_BUS_PIN_RKY)
-#define SERVICE_BUS_MASK_RK7 (1 << SERVICE_BUS_PIN_RK7)
-#define SERVICE_BUS_MASK_WK7 (1 << SERVICE_BUS_PIN_WK7)
+#define SERVICE_BUS_MASK_RKY (1ULL << SERVICE_BUS_PIN_RKY)
+#define SERVICE_BUS_MASK_RK7 (1ULL << SERVICE_BUS_PIN_RK7)
+#define SERVICE_BUS_MASK_WK7 (1ULL << SERVICE_BUS_PIN_WK7)
 
 static void _vg5000_init_memory_map(vg5000_t* sys);
 static void _vg5000_init_keyboard_matrix(vg5000_t* sys);
@@ -284,11 +284,30 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
 
     // If read phase from the EF9345, apply the data to the Z80 data bus
     uint8_t ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
-    if (!ds)
-    {
+    if (!ds) {
         Z80_SET_DATA(cpu_pins, EF9345_GET_MUX_DATA_ADDR(vdp_pins));
     }
 
+    // If RKY is low, the keyboard is selected
+    uint8_t rky = (sys->service_bus & SERVICE_BUS_MASK_RKY) >> SERVICE_BUS_PIN_RKY;
+    if (!rky) {
+        uint8_t a3 = (cpu_pins & Z80_A3) >> Z80_PIN_A3;
+        if (!a3) {
+            // 7808 is selected (74LS156)
+            // Get address lines A0 to A3 from Z80 pins
+            uint64_t cpu_a0_a1_mask = Z80_A0 | Z80_A1;
+            uint8_t key_line = (cpu_pins & cpu_a0_a1_mask) >> Z80_PIN_A0;
+            uint8_t a2 = (cpu_pins & Z80_A2) >> Z80_PIN_A2;
+
+            key_line += a2?4:0;
+
+            if (key_line == 0) {
+                Z80_SET_DATA(cpu_pins, 0x20);
+            }
+        }
+    }
+
+    // VSync causes an interrupt
     uint8_t vsync = (vdp_pins & EF9345_MASK_PC_VS) >> EF9345_PIN_PC_VS;
     if (!vsync) {
         cpu_pins |= Z80_INT;
