@@ -276,6 +276,8 @@ static const uint16_t tick_hblank_start = EF9345_FREQUENCY / 1000000 * 10;
 uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     CHIPS_ASSERT(ef9345);
 
+    // TODO: here, update the R0 register
+
     vdp_pins = _ef9345_external_bus_transfer(ef9345, vdp_pins);
 
     // Beam update
@@ -330,8 +332,6 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
         // latch address and data
         ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
         ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
-
-        // printf("AS falling edge: address=%02x, ds=%d\n", ef9345->l_address, ef9345->l_ds);
     }
 
     uint8_t previous_ds = (previous_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
@@ -344,9 +344,15 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     if (is_ds_falling_edge) {
         // Read cycle
         if (ef9345->l_ds != 0) { // Only Intel mode is emulated at now
-            uint8_t fake_out_data = 0x00;
-            EF9345_SET_MUX_DATA_ADDR(vdp_pins, fake_out_data);
-            // printf("Read cycle: address=%02x, data=%02x\n", ef9345->l_address, fake_out_data);
+            uint8_t reg_num = ef9345->l_address & 0x0F;
+            if (reg_num & 0x07) {
+                uint8_t data_out = ef9345->direct_regs[reg_num];
+                EF9345_SET_MUX_DATA_ADDR(vdp_pins, data_out);
+            } else {
+                // TODO: remove when the R0 register is implemented
+                uint8_t fake_out_data = 0x00;
+                EF9345_SET_MUX_DATA_ADDR(vdp_pins, fake_out_data);
+            }
         }
     }
 
@@ -362,7 +368,13 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
         if (ef9345->l_ds != 0) {
             // Only Intel mode is emulated at now
             uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
-            // printf("Write cycle: address=%02x, data=%02x\n", ef9345->l_address, data_in);
+            uint8_t reg_num = ef9345->l_address & 0x0F;
+            ef9345->direct_regs[reg_num] = data_in;
+
+            // TODO: if bit 7 is set, then the command is executed
+            if (ef9345->l_address & 0x08) {
+                printf("Command %02X executed\n", ef9345->direct_r1);
+            }
         } 
     }
 
