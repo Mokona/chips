@@ -295,15 +295,12 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
         if (!a3) {
             // 7808 is selected (74LS156)
             // Get address lines A0 to A3 from Z80 pins
-            uint64_t cpu_a0_a1_mask = Z80_A0 | Z80_A1;
+            uint64_t cpu_a0_a1_mask = Z80_A0 | Z80_A1 | Z80_A2;
             uint8_t key_line = (cpu_pins & cpu_a0_a1_mask) >> Z80_PIN_A0;
-            uint8_t a2 = (cpu_pins & Z80_A2) >> Z80_PIN_A2;
 
-            key_line += a2?4:0;
-
-            if (key_line == 0) {
-                Z80_SET_DATA(cpu_pins, 0x20);
-            }
+            // No key is pressed at the moment
+            // TODO: implement keypress
+            Z80_SET_DATA(cpu_pins, 0xFF);
         }
     }
 
