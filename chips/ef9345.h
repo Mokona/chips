@@ -56,46 +56,46 @@ extern "C" {
 #endif
 
 // Microprocessor interface
-#define EF9345_PIN_AD0      (17)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD1      (18)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD2      (19)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD3      (21)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD4      (22)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD5      (23)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD6      (24)    /* multiplexed address/data bus */
-#define EF9345_PIN_AD7      (25)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD0      (0)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD1      (1)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD2      (2)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD3      (3)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD4      (4)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD5      (5)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD6      (6)    /* multiplexed address/data bus */
+#define EF9345_PIN_AD7      (7)    /* multiplexed address/data bus */
 
-#define EF9345_PIN_AS       (14)    /* address strobe, falling edge */
-#define EF9345_PIN_DS       (15)    /* data strobe, latched by AS */
-#define EF9345_PIN_RW       (16)    /* read/write, read high */
-#define EF9345_PIN_CS       (26)    /* chip select, latched by AS, active low */
+#define EF9345_PIN_AS       (8)    /* address strobe, falling edge */
+#define EF9345_PIN_DS       (9)    /* data strobe, latched by AS */
+#define EF9345_PIN_RW       (10)    /* read/write, read high */
+#define EF9345_PIN_CS       (11)    /* chip select, latched by AS, active low */
 
 // Memory interface
-#define EF9345_PIN_AM13     (27)    /* memory address bus */
+#define EF9345_PIN_AM13     (29)    /* memory address bus */
 #define EF9345_PIN_AM12     (28)    /* memory address bus */
-#define EF9345_PIN_AM11     (29)    /* memory address bus */
-#define EF9345_PIN_AM10     (30)    /* memory address bus */
-#define EF9345_PIN_AM9      (31)    /* memory address bus */
-#define EF9345_PIN_AM8      (32)    /* memory address bus */
-#define EF9345_PIN_ADM7     (33)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM6     (34)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM5     (35)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM4     (36)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM3     (37)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM2     (38)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM1     (39)    /* multiplexed address/data mode */
-#define EF9345_PIN_ADM0     (40)    /* multiplexed address/data mode */
+#define EF9345_PIN_AM11     (27)    /* memory address bus */
+#define EF9345_PIN_AM10     (26)    /* memory address bus */
+#define EF9345_PIN_AM9      (25)    /* memory address bus */
+#define EF9345_PIN_AM8      (24)    /* memory address bus */
+#define EF9345_PIN_ADM7     (23)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM6     (22)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM5     (21)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM4     (20)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM3     (19)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM2     (18)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM1     (17)    /* multiplexed address/data mode */
+#define EF9345_PIN_ADM0     (16)    /* multiplexed address/data mode */
 
-#define EF9345_PIN_OE       (2)     /* output enable, active low */
-#define EF9345_PIN_WE       (3)     /* write enable, active low */
-#define EF9345_PIN_ASM      (4)     /* memory address strobe mask, falling edge */
+#define EF9345_PIN_OE       (12)     /* output enable, active low */
+#define EF9345_PIN_WE       (13)     /* write enable, active low */
+#define EF9345_PIN_ASM      (14)     /* memory address strobe mask, falling edge */
 
 // Video interface
-#define EF9345_PIN_HVS_HS   (5)     /* horizontal/vertical composite sync / horizontal sync, active high */
-#define EF9345_PIN_PC_VS    (6)     /* phase comparator / vertical sync, active high */
-#define EF9345_PIN_B        (7)     /* blue */
-#define EF9345_PIN_G        (8)     /* green */
-#define EF9345_PIN_R        (9)     /* red */
+#define EF9345_PIN_HVS_HS   (15)     /* horizontal/vertical composite sync / horizontal sync, active high */
+#define EF9345_PIN_PC_VS    (30)     /* phase comparator / vertical sync, active high */
+#define EF9345_PIN_B        (31)     /* blue */
+#define EF9345_PIN_G        (32)     /* green */
+#define EF9345_PIN_R        (33)     /* red */
 
 // pin bit masks
 #define EF9345_MASK_OE      (1ULL<<EF9345_PIN_OE)
@@ -329,8 +329,8 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     
     if (is_as_falling_edge)
     {
-        // latch address and data
-        ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
+        // latch 7 lower bits of the data on the bus (bit 8 is CS/)
+        ef9345->l_address = (EF9345_GET_MUX_DATA_ADDR(vdp_pins) & 0x3F); // CS/ is always low on the VG5000µ
         ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
     }
 
@@ -368,7 +368,7 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
         if (ef9345->l_ds != 0) {
             // Only Intel mode is emulated at now
             uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
-            uint8_t reg_num = ef9345->l_address & 0x0F;
+            uint8_t reg_num = ef9345->l_address & 0x07;
             ef9345->direct_regs[reg_num] = data_in;
 
             // TODO: if bit 7 is set, then the command is executed
