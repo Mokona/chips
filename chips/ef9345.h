@@ -327,10 +327,8 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     uint8_t current_as = (vdp_pins & EF9345_MASK_AS) >> EF9345_PIN_AS;
     uint8_t is_as_falling_edge = previous_as && !current_as;
     
-    if (is_as_falling_edge)
-    {
-        // latch 7 lower bits of the data on the bus (bit 8 is CS/)
-        ef9345->l_address = (EF9345_GET_MUX_DATA_ADDR(vdp_pins) & 0x3F); // CS/ is always low on the VG5000µ
+    if (is_as_falling_edge) {
+        ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
         ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
     }
 
@@ -367,13 +365,15 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
         // Write cycle
         if (ef9345->l_ds != 0) {
             // Only Intel mode is emulated at now
-            uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
-            uint8_t reg_num = ef9345->l_address & 0x07;
-            ef9345->direct_regs[reg_num] = data_in;
+            if ((ef9345->l_address & 0x20) == 0x20) {
+                uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
+                uint8_t reg_num = ef9345->l_address & 0x07;
+                ef9345->direct_regs[reg_num] = data_in;
 
-            // TODO: if bit 7 is set, then the command is executed
-            if (ef9345->l_address & 0x08) {
-                printf("Command %02X executed\n", ef9345->direct_r1);
+                if (ef9345->l_address & 0x08) {
+                    printf("Command %02X executed\n", ef9345->direct_r1);
+                    // TODO: command will be executed on next rising edge of AS
+                }
             }
         } 
     }
