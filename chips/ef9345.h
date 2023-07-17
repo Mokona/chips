@@ -189,8 +189,10 @@ typedef struct {
     uint64_t pins;                  /* pin state after last tick */
 
     /* Latched data by the latest AS falling edge */
-    uint8_t  l_address;
-    uint8_t  l_ds;
+    uint8_t l_address; // called A in the EF9345 datasheet, with a supplementary 8th bit being CS/ (which is always 0 for the VG5000µ)
+    uint8_t l_ds;
+    
+    bool execution_flag; // true when execution was requested by XQR
 
     uint8_t ram[0x2000]; // Video RAM
 
@@ -319,6 +321,56 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram);
 }
 
+static void _ef9345_start_execute_command(ef9345_t* ef9345) {
+    uint8_t command_code = ef9345->direct_r0 & 0xF0;
+    uint8_t command_param = ef9345->direct_r0 & 0x0F;
+    switch (command_code) {
+        case 0x00: // KRx / CLF / CLG
+            break;
+        case 0x10: // KRE
+            break;
+        case 0x20: // KRV
+            break;
+        case 0x30: // OCT
+            break;
+        case 0x40: // KRC
+            break;
+        case 0x50: // KRL
+            break;
+        case 0x60: // EXP
+            break;
+        case 0x70: // CMP
+            break;
+        case 0x80: // IND
+        {
+            uint8_t reg_num = command_param & 0x07;
+            if (command_param & 0x08) { // Read
+                ef9345->direct_r1 = ef9345->indirect_regs[reg_num];
+            }
+            else { // Write to indirect register
+                ef9345->indirect_regs[reg_num] = ef9345->direct_r1;
+            }
+        }
+            break;
+        case 0x90: // VSM / VRM / NOP
+            break;
+        case 0xB0: // INY
+            break;
+        case 0xD0: // MVB
+            break;
+        case 0xE0: // MVD
+            break;
+        case 0xF0: // MVT
+            break;
+        case 0xA0: // ---
+        case 0xC0: // ---
+        default:
+            CHIPS_ASSERT(0 && "EF9345: Unknown command code");
+            break;
+    }
+
+}
+
 static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins) {
     uint64_t previous_pins = ef9345->pins;
     
@@ -326,15 +378,20 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     uint8_t previous_as = (previous_pins & EF9345_MASK_AS) >> EF9345_PIN_AS;
     uint8_t current_as = (vdp_pins & EF9345_MASK_AS) >> EF9345_PIN_AS;
     uint8_t is_as_falling_edge = previous_as && !current_as;
+    uint8_t is_as_rising_edge = !previous_as && current_as;
     
     if (is_as_falling_edge) {
         ef9345->l_address = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
         ef9345->l_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+        ef9345->execution_flag = ef9345->l_address & 0x08;
+    }
+    else if (is_as_rising_edge) {
     }
 
     uint8_t previous_ds = (previous_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
     uint8_t current_ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
     uint8_t is_ds_falling_edge = previous_ds && !current_ds;
+    uint8_t is_ds_rising_edge = !previous_ds && current_ds;
 
     // Normally when DS is low, but to avoid process it 3 times
     // (because EF9345 is ticked 3 times per CPU cycle), I'm only
@@ -353,10 +410,13 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
             }
         }
     }
+    else if(is_ds_rising_edge) {
+    }
 
     uint8_t previous_rw = (previous_pins & EF9345_MASK_RW) >> EF9345_PIN_RW;
     uint8_t current_rw = (vdp_pins & EF9345_MASK_RW) >> EF9345_PIN_RW;
     uint8_t is_rw_falling_edge = previous_rw && !current_rw;
+    uint8_t is_rw_rising_edge = !previous_rw && current_rw;
 
     // Normally when WR/ is low, but to avoid process it 3 times
     // (because EF9345 is ticked 3 times per CPU cycle), I'm only
@@ -369,13 +429,22 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
                 uint8_t data_in = EF9345_GET_MUX_DATA_ADDR(vdp_pins);
                 uint8_t reg_num = ef9345->l_address & 0x07;
                 ef9345->direct_regs[reg_num] = data_in;
-
-                if (ef9345->l_address & 0x08) {
-                    printf("Command %02X executed\n", ef9345->direct_r1);
-                    // TODO: command will be executed on next rising edge of AS
-                }
             }
         } 
+    }
+    else if(is_rw_rising_edge) {
+        if (ef9345->execution_flag) {
+            // TODO: it is not really clear when the command start.
+            // The datasheet says on the rising edge of DS, which implies there's
+            // a read cycle after each execution. Which is not what the VG5000µ ROM
+            // is doing.
+            //
+            // If could be at the rising edge of AS, but with the wiring of the VG5000µ,
+            // and the next rising edge being issued just to trigger the next falling edge of AS,
+            // the execution would be delayed to the next EF9345 command.
+            // So at the moment, I'm considering the execution starts at the rising edge of RW.
+            _ef9345_start_execute_command(ef9345);
+        }
     }
 
     return vdp_pins;
