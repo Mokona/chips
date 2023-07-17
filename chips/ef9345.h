@@ -326,41 +326,83 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
     uint8_t command_param = ef9345->direct_r0 & 0x0F;
     switch (command_code) {
         case 0x00: // KRx / CLF / CLG
+            switch (command_param & 0x06) {
+                case 0x00: // KRF
+                    printf("Unimplemented 0x00 command: %02X\n", command_param);
+                    break;
+                case 0x02: { // KRG
+                    bool is_read = command_param & 0x08;
+                    bool auto_incr = command_param & 0x01;
+
+                    printf("KRG : is_read=%d, auto_incr=%d, A=%d, B=%d\n", is_read, auto_incr, ef9345->direct_r1, ef9345->direct_r2);
+                    // TODO: implement read/write to MP
+                    // TODO: so, need to implement MP addressing
+                    // TODO: need to set the status flags
+                    // TODO: set execution time
+                    break;
+                }
+                case 0x04: // CLF
+                    printf("Unimplemented 0x00 command: %02X\n", command_param);
+                    break;
+                case 0x06: // CLG
+                    printf("Unimplemented 0x00 command: %02X\n", command_param);
+                    break;
+                default:
+                    CHIPS_ASSERT(0 && "EF9345: error in decoding KRx and co.");
+                    break;
+            }
             break;
         case 0x10: // KRE
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x20: // KRV
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x30: // OCT
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x40: // KRC
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x50: // KRL
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x60: // EXP
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0x70: // CMP
+            printf("Unimplemented command: %02X\n", command_code);
             break;
-        case 0x80: // IND
-        {
+        case 0x80: { // IND
             uint8_t reg_num = command_param & 0x07;
-            if (command_param & 0x08) { // Read
+            bool is_read = command_param & 0x08;
+            if (is_read) {
                 ef9345->direct_r1 = ef9345->indirect_regs[reg_num];
             }
             else { // Write to indirect register
                 ef9345->indirect_regs[reg_num] = ef9345->direct_r1;
             }
-        }
+            // TODO: need to set the status flags
+            // TODO: set execution time
             break;
+        }
         case 0x90: // VSM / VRM / NOP
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0xB0: // INY
+            printf("Increment Y\n");
+            // TODO: Increment MP
+            // TODO: need to set the status flags
+            // TODO: set execution time
             break;
         case 0xD0: // MVB
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0xE0: // MVD
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0xF0: // MVT
+            printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0xA0: // ---
         case 0xC0: // ---
