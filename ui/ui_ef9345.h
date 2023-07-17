@@ -110,9 +110,9 @@ static void _ui_ef9345_regs(ui_ef9345_t* win) {
     ImGui::Text("R4: %02X  R5: %02X", vdp->direct_r4, vdp->direct_r5);
     ImGui::Text("R6: %02X  R7: %02X", vdp->direct_r6, vdp->direct_r7);
     ImGui::Separator();
-    ImGui::Text("TGS: %04X", vdp->indirect_tgs);
-    ImGui::Text("MAT: %04X  PAT:  %04X", vdp->indirect_mat, vdp->indirect_pat);
-    ImGui::Text("DOR: %04X  ROR:  %04X", vdp->indirect_dor, vdp->indirect_ror);
+    ImGui::Text("TGS: %02X", vdp->indirect_tgs);
+    ImGui::Text("MAT: %02X  PAT:  %02X", vdp->indirect_mat, vdp->indirect_pat);
+    ImGui::Text("DOR: %02X  ROR:  %02X", vdp->indirect_dor, vdp->indirect_ror);
     ImGui::Separator();
     ImGui::Text("Latched Addr: %04X", vdp->l_address);
     ImGui::Text("Latched DS  : %04X", vdp->l_ds);
