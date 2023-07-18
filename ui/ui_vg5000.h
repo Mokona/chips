@@ -58,6 +58,7 @@ typedef struct {
     ui_kbd_t kbd;
     ui_memmap_t memmap;
     ui_memedit_t memedit[4];
+    ui_memedit_t vmemedit;
     ui_dasm_t dasm[4];
     ui_dbg_t dbg;
     ui_snapshot_t snapshot;
@@ -139,6 +140,7 @@ static void _ui_vg5000_draw_menu(ui_vg5000_t* ui) {
                 ImGui::MenuItem("Window #4", 0, &ui->dasm[3].open);
                 ImGui::EndMenu();
             }
+            ImGui::MenuItem("VRAM Editor", 0, &ui->vmemedit.open);
             ImGui::EndMenu();
         }
         ui_util_options_menu();
@@ -173,6 +175,20 @@ static void _ui_vg5000_mem_write(int layer, uint16_t addr, uint8_t data, void* u
     (void)layer;
     vg5000_t* vg5000 = (vg5000_t*) user_data;
     mem_wr(&vg5000->mem, addr, data);
+}
+
+static uint8_t _ui_vg5000_vmem_read(int layer, uint16_t addr, void* user_data) {
+    CHIPS_ASSERT(user_data);
+    (void)layer;
+    vg5000_t* vg5000 = (vg5000_t*) user_data;
+    return mem_rd(&vg5000->vdp.mem, addr);
+}
+
+static void _ui_vg5000_vmem_write(int layer, uint16_t addr, uint8_t data, void* user_data) {
+    CHIPS_ASSERT(user_data);
+    (void)layer;
+    vg5000_t* vg5000 = (vg5000_t*) user_data;
+    mem_wr(&vg5000->vdp.mem, addr, data);
 }
 
 static const ui_chip_pin_t _ui_vg5000_cpu_pins[] = {
@@ -349,6 +365,18 @@ void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
             x += dx; y += dy;
         }
     }
+    x += dx; y += dy;
+    {
+        ui_memedit_desc_t desc = {0};
+        desc.title = "Video Memory Map";
+        desc.read_cb = _ui_vg5000_vmem_read;
+        desc.write_cb = _ui_vg5000_vmem_write;
+        desc.user_data = ui->vg5000;
+        desc.x = x;
+        desc.y = y;
+        desc.max_addr = 0x2000;
+        ui_memedit_init(&ui->vmemedit, &desc);
+    }
 }
 
 void ui_vg5000_discard(ui_vg5000_t* ui) {
@@ -364,6 +392,7 @@ void ui_vg5000_discard(ui_vg5000_t* ui) {
         ui_memedit_discard(&ui->memedit[i]);
         ui_dasm_discard(&ui->dasm[i]);
     }
+    ui_memedit_discard(&ui->vmemedit);
     ui_dbg_discard(&ui->dbg);
 
 }
@@ -384,6 +413,7 @@ void ui_vg5000_draw(ui_vg5000_t* ui) {
         ui_memedit_draw(&ui->memedit[i]);
         ui_dasm_draw(&ui->dasm[i]);
     }
+    ui_memedit_draw(&ui->vmemedit);
     ui_dbg_draw(&ui->dbg);
 }
 
