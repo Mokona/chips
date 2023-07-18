@@ -184,9 +184,7 @@ typedef struct {
         };
     };
 
-    mem_t mem;
-
-    uint64_t pins;                  /* pin state after last tick */
+    uint64_t pins; /* pin state after last tick */
 
     /* Latched data by the latest AS falling edge */
     uint8_t l_address; // called A in the EF9345 datasheet, with a supplementary 8th bit being CS/ (which is always 0 for the VG5000µ)
@@ -194,6 +192,7 @@ typedef struct {
     
     bool execution_flag; // true when execution was requested by XQR
 
+    mem_t mem;  // Access to Video RAM
     uint8_t ram[0x2000]; // Video RAM
 
     uint16_t line_tick;
@@ -207,7 +206,6 @@ typedef struct {
 } ef9345_t;
 
 /* helper macros to extract address and data values from pin mask */
-
 #define EF9345_AD0_AD7_MASK (EF9345_MASK_AD0 | EF9345_MASK_AD1 | EF9345_MASK_AD2 | EF9345_MASK_AD3 | EF9345_MASK_AD4 | EF9345_MASK_AD5 | EF9345_MASK_AD6 | EF9345_MASK_AD7)
 #define EF9345_ADM0_ADM7_MASK (EF9345_MASK_ADM0 | EF9345_MASK_ADM1 | EF9345_MASK_ADM2 | EF9345_MASK_ADM3 | EF9345_MASK_ADM4 | EF9345_MASK_ADM5 | EF9345_MASK_ADM6 | EF9345_MASK_ADM7)
 #define EF9345_AM8_AM13_MASK (EF9345_MASK_AM8 | EF9345_MASK_AM9 | EF9345_MASK_AM10 | EF9345_MASK_AM11 | EF9345_MASK_AM12 | EF9345_MASK_AM13)
@@ -229,6 +227,8 @@ typedef struct {
 /* set multiplexed data to ADM0-ADM7 pins */
 #define EF9345_SET_MUX_DATA(p, d) {((p) = ((p)&~EF9345_ADM0_ADM7_MASK)|(((d)&0xff)<<EF9345_PIN_ADM0));}
 
+/* Memory pointer macros */
+//
 
 /* initialize a new ef9345 instance */
 void ef9345_init(ef9345_t *ef9345);
@@ -318,7 +318,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
 
 static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_init(&ef9345->mem);
-    mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram);
+    mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
 }
 
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {
@@ -389,12 +389,16 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
         case 0x90: // VSM / VRM / NOP
             printf("Unimplemented command: %02X\n", command_code);
             break;
-        case 0xB0: // INY
-            printf("Increment Y\n");
+        case 0xB0: { // INY
+            uint8_t y = ef9345->direct_r6 & 0x1f;
+            y+=1;
+            if (y>31) { y -= 24; }
+            ef9345->direct_r6 = (ef9345->direct_r6 & 0xe0) | y;
             // TODO: Increment MP
             // TODO: need to set the status flags
             // TODO: set execution time
             break;
+        }
         case 0xD0: // MVB
             printf("Unimplemented command: %02X\n", command_code);
             break;
