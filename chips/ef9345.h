@@ -321,6 +321,17 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
 }
 
+static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
+    uint16_t x = ef9345->direct_r7 & 0x3f;
+    uint16_t y = ef9345->direct_r6 & 0x1f;
+    uint16_t z = ((ef9345->direct_r7 & 0xc0) >> 6) |
+                 ((ef9345->direct_r6 & 0x20) >> 3) |
+                 ((ef9345->direct_r6 & 0x80) >> 4);
+
+    uint16_t address = x | (y << 6) | (z << 11);
+    return address;
+}
+
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {
     uint8_t command_code = ef9345->direct_r0 & 0xF0;
     uint8_t command_param = ef9345->direct_r0 & 0x0F;
@@ -334,8 +345,24 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
                     bool is_read = command_param & 0x08;
                     bool auto_incr = command_param & 0x01;
 
-                    printf("KRG : is_read=%d, auto_incr=%d, A=%d, B=%d\n", is_read, auto_incr, ef9345->direct_r1, ef9345->direct_r2);
-                    // TODO: implement read/write to MP
+                    int16_t address = _ef9345_mp_to_physical_address(ef9345);
+
+                    if (is_read) {
+                        ef9345->direct_r1 = mem_rd(&ef9345->mem, address);
+                        ef9345->direct_r2 = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+                    }
+                    else {
+                        mem_wr(&ef9345->mem, address, ef9345->direct_r1);
+                        mem_wr(&ef9345->mem, address + 0x0800, ef9345->direct_r2); // TODO: verify if memory should wrap
+                    }
+                    // TODO: direct_r3 is used as a working register. It should be changed. But to what?
+
+                    if (auto_incr) {
+                        uint8_t x = ef9345->direct_r7 & 0x3f;
+                        x=(x+1)%40;
+                        ef9345->direct_r7 = (ef9345->direct_r7 & 0xc0) | x;
+                    }
+
                     // TODO: so, need to implement MP addressing
                     // TODO: need to set the status flags
                     // TODO: set execution time
