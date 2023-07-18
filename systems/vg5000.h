@@ -268,6 +268,9 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
             mem_wr(&sys->mem, addr, Z80_GET_DATA(cpu_pins));
         }
     }
+
+    // TODO: implement 7814, which adds a wait cycle
+    // TODO: implement 7806, which implement memory adressing in case of extension
     
     // Decode EF9347 and K7 control signals
     uint64_t vdp_pins = sys->vdp.pins;
