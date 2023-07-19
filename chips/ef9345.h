@@ -188,15 +188,19 @@ typedef struct {
 
     /* Latched data by the latest AS falling edge */
     uint8_t l_address; // called A in the EF9345 datasheet, with a supplementary 8th bit being CS/ (which is always 0 for the VG5000µ)
-    uint8_t l_ds;
-    
+    uint8_t l_ds;  
     bool execution_flag; // true when execution was requested by XQR
 
+    /* Video RAM */
     mem_t mem;  // Access to Video RAM
     uint8_t ram[0x2000]; // Video RAM
 
+    /* Frame update */
     uint16_t line_tick;
     uint16_t current_line;
+
+    bool interlaced; // TODO: check bool packing in this structure
+    uint16_t lines_per_frame;
 
     uint16_t fb_width;
     uint16_t fb_height;
@@ -252,6 +256,7 @@ uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
 static void _ef9345_init_memory_map(ef9345_t* ef9345);
 static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins);
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
+static void _ef9345_recompute_configuration(ef9345_t* ef9345);
 
 void ef9345_init(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
@@ -295,6 +300,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
 static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_init(&ef9345->mem);
     mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
+    _ef9345_recompute_configuration(ef9345);
 }
 
 static uint16_t _ef9345_transcode_physical_address(uint16_t x, uint16_t y, uint16_t b0) {
@@ -380,6 +386,11 @@ static void _ef9345_incr_ap_x(ef9345_t* ef9345) {
     uint8_t x = ef9345->direct_r5 & 0x3f;
     x=(x+1)%40;
     ef9345->direct_r7 = (ef9345->direct_r7 & 0xc0) | x;
+}
+
+static void _ef9345_recompute_configuration(ef9345_t* ef9345) {
+    ef9345->lines_per_frame = (ef9345->indirect_tgs & 0) ? 312 : 262;
+    ef9345->interlaced = ef9345->indirect_tgs & 1; // TODO: not emulated at the moment
 }
 
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {
@@ -480,6 +491,7 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
             else { // Write to indirect register
                 ef9345->indirect_regs[reg_num] = ef9345->direct_r1;
             }
+            _ef9345_recompute_configuration(ef9345);
             // TODO: need to set the status flags
             // TODO: set execution time
             break;
@@ -591,10 +603,12 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
 }
 
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
+    const uint16_t last_scan_line = ef9345->lines_per_frame;
+
     ef9345->line_tick = (ef9345->line_tick + 1) % tick_per_line;
 
     if (ef9345->line_tick == 0) {
-        ef9345->current_line = (ef9345->current_line + 1) % 312; // TODO: change number of lines depending on TGS
+        ef9345->current_line = (ef9345->current_line + 1) % last_scan_line;
     }
 
     // Sets VBLANK for the two first lines
@@ -611,7 +625,6 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
         vdp_pins |= EF9345_MASK_HVS_HS;
     }
 
-    uint16_t last_scan_line = 312;
     uint16_t active_scan_lines = 250;
     uint16_t first_active_line = last_scan_line - active_scan_lines;
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
@@ -619,7 +632,7 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
         // Active lines
         if (ef9345->line_tick < 40*tick_for_1mus) {
             // Active display time
-            uint32_t fake_address = ((ef9345->current_line - first_active_line) * 320) +
+            uint32_t fake_address = ((ef9345->current_line - first_active_line) * last_scan_line) +
                                     (ef9345->line_tick * 2);
 
             ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
