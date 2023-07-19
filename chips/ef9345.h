@@ -324,7 +324,8 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
 static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
     uint16_t x = ef9345->direct_r7 & 0x3f;
     uint16_t y = ef9345->direct_r6 & 0x1f;
-    uint16_t z = ((ef9345->direct_r7 & 0xc0) >> 6) |
+    uint16_t z = ((ef9345->direct_r7 & 0x80) >> 7) |
+                 ((ef9345->direct_r7 & 0x40) >> 5) |
                  ((ef9345->direct_r6 & 0x20) >> 3) |
                  ((ef9345->direct_r6 & 0x80) >> 4);
 
