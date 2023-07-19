@@ -276,6 +276,8 @@ static const uint16_t tick_per_line = EF9345_FREQUENCY / 1000000 * 64;
 // TODO: it is slighlty different with 80 char/row)
 static const uint16_t tick_hblank_start = EF9345_FREQUENCY / 1000000 * 10;
 
+// Number of ticks for 1µs
+static const uint16_t tick_for_1mus = EF9345_FREQUENCY / 1000000;
 
 uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     CHIPS_ASSERT(ef9345);
@@ -571,13 +573,19 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
         vdp_pins |= EF9345_MASK_HVS_HS;
     }
 
+    uint16_t last_scan_line = 312;
+    uint16_t active_scan_lines = 250;
+    uint16_t first_active_line = last_scan_line - active_scan_lines;
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
-    if (ef9345->current_line < 250)
-    {
-        uint32_t fake_address = (ef9345->current_line * 320) +
-                                (ef9345->line_tick * 2);
+    if (ef9345->current_line >= first_active_line && ef9345->current_line < last_scan_line) {
+        // Active lines
+        if (ef9345->line_tick < 40*tick_for_1mus) {
+            // Active display time
+            uint32_t fake_address = ((ef9345->current_line - first_active_line) * 320) +
+                                    (ef9345->line_tick * 2);
 
-        ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
+            ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
+        }
     }
 
     return vdp_pins;
