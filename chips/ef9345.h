@@ -251,6 +251,7 @@ uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
 
 static void _ef9345_init_memory_map(ef9345_t* ef9345);
 static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins);
+static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
 
 void ef9345_init(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
@@ -272,6 +273,7 @@ void ef9345_reset(ef9345_t* ef9345) {
 static const uint16_t tick_per_line = EF9345_FREQUENCY / 1000000 * 64;
 
 // The H Blank is set during the 10µs (for 40 char/row)
+// TODO: it is slighlty different with 80 char/row)
 static const uint16_t tick_hblank_start = EF9345_FREQUENCY / 1000000 * 10;
 
 
@@ -281,35 +283,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
     // TODO: here, update the R0 register
 
     vdp_pins = _ef9345_external_bus_transfer(ef9345, vdp_pins);
-
-    // Beam update
-    ef9345->line_tick = (ef9345->line_tick + 1) % tick_per_line;
-
-    if (ef9345->line_tick == 0) {
-        ef9345->current_line = (ef9345->current_line + 1) % 312; // TODO: change number of lines depending on TGS
-    }
-
-    // Sets VBLANK for the two first lines
-    if (ef9345->current_line < 2) {
-        vdp_pins &= ~EF9345_MASK_PC_VS;
-    } else {
-        vdp_pins |= EF9345_MASK_PC_VS;
-    }
-
-    if (ef9345->line_tick < tick_hblank_start) {
-        vdp_pins &= ~EF9345_MASK_HVS_HS;
-    } else {
-        vdp_pins |= EF9345_MASK_HVS_HS;
-    }
-
-    // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
-    if (ef9345->current_line < 250)
-    {
-        uint32_t fake_address = (ef9345->current_line * 320) +
-                                (ef9345->line_tick * 2);
-
-        ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
-    }
+    vdp_pins = _ef9345_beam_update(ef9345, vdp_pins);
 
     ef9345->pins = vdp_pins;
 
@@ -571,6 +545,39 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
             // So at the moment, I'm considering the execution starts at the rising edge of RW.
             _ef9345_start_execute_command(ef9345);
         }
+    }
+
+    return vdp_pins;
+}
+
+static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
+    ef9345->line_tick = (ef9345->line_tick + 1) % tick_per_line;
+
+    if (ef9345->line_tick == 0) {
+        ef9345->current_line = (ef9345->current_line + 1) % 312; // TODO: change number of lines depending on TGS
+    }
+
+    // Sets VBLANK for the two first lines
+    if (ef9345->current_line < 2) {
+        vdp_pins &= ~EF9345_MASK_PC_VS;
+    } else {
+        vdp_pins |= EF9345_MASK_PC_VS;
+    }
+
+    // Sets HBLANK
+    if (ef9345->line_tick < tick_hblank_start) {
+        vdp_pins &= ~EF9345_MASK_HVS_HS;
+    } else {
+        vdp_pins |= EF9345_MASK_HVS_HS;
+    }
+
+    // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
+    if (ef9345->current_line < 250)
+    {
+        uint32_t fake_address = (ef9345->current_line * 320) +
+                                (ef9345->line_tick * 2);
+
+        ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
     }
 
     return vdp_pins;
