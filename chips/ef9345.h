@@ -332,6 +332,41 @@ static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
     return address;
 }
 
+static uint16_t _ef9345_ap_to_physical_address(ef9345_t* ef9345) {
+    uint16_t x = ef9345->direct_r5 & 0x3f;
+    uint16_t y = ef9345->direct_r4 & 0x1f;
+    uint16_t z = ((ef9345->direct_r5 & 0x80) >> 7) |
+                 ((ef9345->direct_r5 & 0x40) >> 5) |
+                 ((ef9345->direct_r4 & 0x20) >> 3) |
+                 ((ef9345->direct_r6 & 0x40) >> 3);
+
+    uint16_t address = x | (y << 6) | (z << 11);
+    return address;
+}
+
+static void _ef9345_incr_mp_y(ef9345_t* ef9345) {
+    uint8_t y = ef9345->direct_r6 & 0x1f;
+    y+=1;
+    if (y>31) { y -= 24; }
+    ef9345->direct_r6 = (ef9345->direct_r6 & 0xe0) | y;
+}
+
+static void _ef9345_incr_mp_x(ef9345_t* ef9345, bool increment_y) {
+    uint8_t x = ef9345->direct_r7 & 0x3f;
+    x=(x+1)%40;
+    ef9345->direct_r7 = (ef9345->direct_r7 & 0xc0) | x;
+
+    if (x == 0 && increment_y) {
+        _ef9345_incr_mp_y(ef9345);
+    }
+}
+
+static void _ef9345_incr_ap_x(ef9345_t* ef9345) {
+    uint8_t x = ef9345->direct_r5 & 0x3f;
+    x=(x+1)%40;
+    ef9345->direct_r7 = (ef9345->direct_r7 & 0xc0) | x;
+}
+
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {
     uint8_t command_code = ef9345->direct_r0 & 0xF0;
     uint8_t command_param = ef9345->direct_r0 & 0x0F;
@@ -358,12 +393,9 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
                     // TODO: direct_r3 is used as a working register. It should be changed. But to what?
 
                     if (auto_incr) {
-                        uint8_t x = ef9345->direct_r7 & 0x3f;
-                        x=(x+1)%40;
-                        ef9345->direct_r7 = (ef9345->direct_r7 & 0xc0) | x;
+                        _ef9345_incr_mp_x(ef9345, false);
                     }
 
-                    // TODO: so, need to implement MP addressing
                     // TODO: need to set the status flags
                     // TODO: set execution time
                     break;
@@ -385,9 +417,33 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
         case 0x20: // KRV
             printf("Unimplemented command: %02X\n", command_code);
             break;
-        case 0x30: // OCT
-            printf("Unimplemented command: %02X\n", command_code);
+        case 0x30: { // OCT
+            bool is_read = command_param & 0x08;
+            bool is_aux = command_param & 0x04;
+            bool auto_incr = command_param & 0x01;
+
+            int16_t address = is_aux?_ef9345_ap_to_physical_address(ef9345):
+                                     _ef9345_mp_to_physical_address(ef9345);
+
+            if (is_read) {
+                ef9345->direct_r1 = mem_rd(&ef9345->mem, address);
+            }
+            else {
+                mem_wr(&ef9345->mem, address, ef9345->direct_r1);
+            }
+
+            if (auto_incr) {
+                if (is_aux ) {
+                    _ef9345_incr_ap_x(ef9345);
+                }
+                else {
+                    _ef9345_incr_mp_x(ef9345, true);
+                }
+            }
+            // TODO: need to set the status flags
+            // TODO: set execution time
             break;
+        }
         case 0x40: // KRC
             printf("Unimplemented command: %02X\n", command_code);
             break;
@@ -417,11 +473,7 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
             printf("Unimplemented command: %02X\n", command_code);
             break;
         case 0xB0: { // INY
-            uint8_t y = ef9345->direct_r6 & 0x1f;
-            y+=1;
-            if (y>31) { y -= 24; }
-            ef9345->direct_r6 = (ef9345->direct_r6 & 0xe0) | y;
-            // TODO: Increment MP
+            _ef9345_incr_mp_y(ef9345);
             // TODO: need to set the status flags
             // TODO: set execution time
             break;
