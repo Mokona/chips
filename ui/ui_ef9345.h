@@ -116,6 +116,11 @@ static void _ui_ef9345_regs(ui_ef9345_t* win) {
     ImGui::Separator();
     ImGui::Text("Latched Addr: %04X", vdp->l_address);
     ImGui::Text("Latched DS  : %04X", vdp->l_ds);
+    ImGui::Separator();
+    ImGui::Text("TGS decoding");
+    ImGui::Text(vdp->interlaced?"- Interlaced":"- Non interlaced");
+    ImGui::Text("- # of lines: %3d", vdp->lines_per_frame);
+    ImGui::Text(vdp->indirect_tgs&4?"- Composite Sync":"- H/V Sync Out");
 }
 
 void ui_ef9345_draw(ui_ef9345_t* win) {
