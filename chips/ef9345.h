@@ -156,6 +156,14 @@ extern "C" {
 
 #define EF9345_FREQUENCY (12000000)    /* 12 MHz */
 
+typedef enum {
+    EF9345_CHAR_CODE_40_LONG,
+    EF9345_CHAR_CODE_40_VAR,
+    EF9345_CHAR_CODE_80_SHORT,
+    EF9345_CHAR_CODE_80_LONG,
+    EF9345_CHAR_CODE_40_SHORT,
+} ef9345_char_code_t;
+
 typedef struct {
     union {
         uint8_t direct_regs[8];
@@ -201,6 +209,9 @@ typedef struct {
 
     bool interlaced; // TODO: check bool packing in this structure
     uint16_t lines_per_frame;
+    ef9345_char_code_t char_code;
+    uint8_t block_origin;
+    uint8_t origin_row_yor;
 
     uint16_t fb_width;
     uint16_t fb_height;
@@ -391,6 +402,9 @@ static void _ef9345_incr_ap_x(ef9345_t* ef9345) {
 static void _ef9345_recompute_configuration(ef9345_t* ef9345) {
     ef9345->lines_per_frame = (ef9345->indirect_tgs & 0) ? 312 : 262;
     ef9345->interlaced = ef9345->indirect_tgs & 1; // TODO: not emulated at the moment
+    ef9345->char_code = ((ef9345->indirect_tgs >> 6) & 0x03) | ((ef9345->indirect_pat >> 5) & 0x04);
+    ef9345->block_origin = (ef9345->indirect_ror & 0b11100000) >> 4; // Implicit b0 at 0 (blocks are always even)
+    ef9345->origin_row_yor = (ef9345->indirect_ror & 0b11111);
 }
 
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {

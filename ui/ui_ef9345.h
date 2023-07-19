@@ -91,8 +91,8 @@ void ui_ef9345_init(ui_ef9345_t* win, const ui_ef9345_desc_t* desc) {
     win->vdp = desc->vdp;
     win->init_x = (float) desc->x;
     win->init_y = (float) desc->y;
-    win->init_w = (float) ((desc->w == 0) ? 360 : desc->w);
-    win->init_h = (float) ((desc->h == 0) ? 340 : desc->h);
+    win->init_w = (float) ((desc->w == 0) ? 390 : desc->w);
+    win->init_h = (float) ((desc->h == 0) ? 380 : desc->h);
     win->open = desc->open;
     win->valid = true;
     ui_chip_init(&win->chip, &desc->chip_desc);
@@ -121,6 +121,23 @@ static void _ui_ef9345_regs(ui_ef9345_t* win) {
     ImGui::Text(vdp->interlaced?"- Interlaced":"- Non interlaced");
     ImGui::Text("- # of lines: %3d", vdp->lines_per_frame);
     ImGui::Text(vdp->indirect_tgs&4?"- Composite Sync":"- H/V Sync Out");
+    ImGui::Separator();
+    ImGui::Text("ROR decoding");
+    ImGui::Text("- Block origin: %02d", vdp->block_origin);
+    ImGui::Text("- YOR: %02d", vdp->origin_row_yor);
+    ImGui::Separator();
+    const char * char_code_str;
+    switch (vdp->char_code) {
+        case EF9345_CHAR_CODE_40_LONG:  char_code_str = "40 Char Long"; break;
+        case EF9345_CHAR_CODE_40_VAR:   char_code_str = "40 Char Var"; break;
+        case EF9345_CHAR_CODE_80_SHORT: char_code_str = "80 Char Short"; break;
+        case EF9345_CHAR_CODE_80_LONG:  char_code_str = "80 Char Long"; break;
+        case EF9345_CHAR_CODE_40_SHORT: char_code_str = "40 Char Short"; break;
+    default:
+        char_code_str = "Invalid"; break;
+        break;
+    }
+    ImGui::Text("Char code: %s", char_code_str);
 }
 
 void ui_ef9345_draw(ui_ef9345_t* win) {
