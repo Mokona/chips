@@ -297,27 +297,65 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
 }
 
+static uint16_t _ef9345_transcode_physical_address(uint16_t x, uint16_t y, uint16_t b0) {
+    uint16_t address = 0;
+    if (y >= 8) {
+        address |= b0 << 10;
+        if (x & 0b100000) {
+            address |= (y & 0b111) << 5;
+            address |= (y & 0b11000);
+        }
+        else {
+            address |= x & 0b11000;
+            address |= (y & 0b11111) << 5;
+        }
+    } else {
+        if (y & 1) {
+            uint8_t not_x4and5 = ((~x)&0b110000) >> 1;
+            address |= 1 << 7;
+            address |= not_x4and5;
+            if (!b0) { // odd Y && b0 == 0
+                address |= (x & 0b1000) << 7;
+            }
+            else {
+                address |= 1 << 10;
+            }
+        }
+        else { // even Y
+            address |= b0 << 10;
+            address |= (x & 0b111000) << 2;
+        }
+    }
+    return address;
+}
+
 static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
+    // See Figure 11 and Table 2 from the datasheet 
     uint16_t x = ef9345->direct_r7 & 0x3f;
     uint16_t y = ef9345->direct_r6 & 0x1f;
-    uint16_t z = ((ef9345->direct_r7 & 0x80) >> 7) |
-                 ((ef9345->direct_r7 & 0x40) >> 5) |
-                 ((ef9345->direct_r6 & 0x20) >> 3) |
-                 ((ef9345->direct_r6 & 0x80) >> 4);
+    uint16_t b0 = (ef9345->direct_r7 & 0x80) >> 7;
+    uint16_t transcoded = _ef9345_transcode_physical_address(x, y, b0);
 
-    uint16_t address = x | (y << 6) | (z << 11);
+    uint16_t low_x = x & 0x07;
+    uint16_t high_z = ((ef9345->direct_r7 & 0x40) >> 6) | // b1 on bit 0
+                      ((ef9345->direct_r6 & 0x20) >> 4) | // d0 on bit 1
+                      ((ef9345->direct_r6 & 0x80) >> 5);  // d1 on bit 2 
+    uint16_t address = low_x | transcoded | (high_z << 11);
     return address;
 }
 
 static uint16_t _ef9345_ap_to_physical_address(ef9345_t* ef9345) {
     uint16_t x = ef9345->direct_r5 & 0x3f;
     uint16_t y = ef9345->direct_r4 & 0x1f;
-    uint16_t z = ((ef9345->direct_r5 & 0x80) >> 7) |
-                 ((ef9345->direct_r5 & 0x40) >> 5) |
-                 ((ef9345->direct_r4 & 0x20) >> 3) |
-                 ((ef9345->direct_r6 & 0x40) >> 3);
+    uint16_t b0_prime = (ef9345->direct_r5 & 0x80) >> 7;
+    uint16_t transcoded = _ef9345_transcode_physical_address(x, y, b0_prime);
 
-    uint16_t address = x | (y << 6) | (z << 11);
+    uint16_t low_x = x & 0x07;
+    uint16_t high_z = ((ef9345->direct_r5 & 0x40) >> 6) | // b'1 on bit 0
+                      ((ef9345->direct_r4 & 0x20) >> 4) | // d'0 on bit 1
+                      ((ef9345->direct_r6 & 0x40) >> 4);  // d'1 on bit 2 
+    uint16_t address = low_x | transcoded | (high_z << 11);
+
     return address;
 }
 
