@@ -635,7 +635,6 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
 
 static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
     // TODO: implement copy for the service row
-
     const uint8_t actual_row = (ef9345->origin_row_yor + row) % 24;
     const uint8_t block_origin = ef9345->block_origin;
 
@@ -646,7 +645,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
 
     for (uint8_t x = 0; x < 40; x++) {
         const uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, block_origin);
-        const uint8_t data_a_prime = mem_rd(&ef9345->mem, address);
+        const uint8_t data_a_prime = mem_rd(&ef9345->mem, address); // TODO: high cost to use a "mem", use a directly accessed buffer? As there' no paging
         const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
 
         const bool is_del = (data_b_prime & 0b11100000) == 0b10000000; // TODO: should a_prime 8th bit also be a 1?
@@ -659,6 +658,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
             latched_underline = (data_b_prime & 0b00000100) << 2;
             latched_insert    = (data_b_prime & 0b00000010) >> 1;
             latched_conceal   = (data_b_prime & 0b00000001) << 2;
+            latched_background_color = data_a_prime & 0b111;
             data_c = 0;
             data_b = 0b00100000 | latched_underline | latched_conceal | latched_insert;
             data_a = data_a_prime;
@@ -682,7 +682,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
                 data_a = negative | color | flash | latched_background_color;
                 data_b = in_ram | latched_underline | width | latched_conceal | height | latched_insert;
             }
-            data_c = data_b;
+            data_c = data_b_prime;
         }
 
         ef9345->row_buffer[x] = (ef945_char_triplet_t) {data_a, data_b, data_c};
@@ -767,22 +767,49 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     const uint16_t active_scan_lines = 250;
     const uint16_t first_active_line = last_scan_line - active_scan_lines;
 
+    static uint16_t latest_line = 0; // TODO: moves this out of static storage
+
     // Loads the next character row in intermediary buffer during the last line of a row
     // TODO: be closer to actual loading timings.
-    if ((ef9345->current_line > first_active_line - 1) && (ef9345->current_line + 1) % 10 == 0) {
-        uint8_t row = (ef9345->current_line - first_active_line) / 10;
-        _ef9345_load_char_row(ef9345, row);
+    // TODO: by doing it at this moment, the last line row of the current char row will be corrupted, are there
+    // two buffers ?
+    if (latest_line != ef9345->current_line) {
+        latest_line = ef9345->current_line;
+        
+        if ((ef9345->current_line > first_active_line - 1) && (ef9345->current_line + 1) % 10 == 0) {
+            uint8_t row = ((ef9345->current_line + 1) - first_active_line) / 10;
+            _ef9345_load_char_row(ef9345, row);
+        }
     }
+
+    static uint8_t latest_x = 0; // TODO: moves this out of static storage
 
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
     if (ef9345->current_line >= first_active_line && ef9345->current_line < last_scan_line) {
         // Active lines
         if (ef9345->line_tick < 40*tick_for_1mus) {
             // Active display time
-            uint32_t fake_address = ((ef9345->current_line - first_active_line) * last_scan_line) +
-                                    (ef9345->line_tick * 2);
+            const uint8_t x = ef9345->line_tick / tick_for_1mus;
 
-            ef9345->fb[fake_address] = (fake_address / 4 ) & 7;
+            if (x != latest_x) {
+                latest_x = x;
+                const uint8_t char_from_buffer = ef9345->row_buffer[x].c;
+                const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
+
+                uint32_t address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
+                uint8_t value = colors_from_buffer & 0b111;
+                if (char_from_buffer > 32 && char_from_buffer < 128) {
+                    value = (colors_from_buffer & 0b1110000) >> 4;
+                }
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+            }
         }
     }
 
