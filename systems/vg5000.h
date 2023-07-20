@@ -172,7 +172,7 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
                 .width = sys?sys->vdp.fb_width:320,
                 .height = sys?sys->vdp.fb_height:250
             },
-            .bytes_per_pixel = 1,   // TODO: verify
+            .bytes_per_pixel = 1,
             .buffer = {
                 .ptr = sys?sys->vdp.fb:0,
                 .size = sys?sys->vdp.fb_size:0,

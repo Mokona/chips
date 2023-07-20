@@ -11,8 +11,6 @@
     - mem.h
     - TODO: check needed dependencies
 
-    - TODO: check if using zlib/libpng
-
     ## zlib/libpng license
 
     Copyright (c) 2023 Sylvain Glaize
