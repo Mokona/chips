@@ -165,6 +165,12 @@ typedef enum {
 } ef9345_char_code_t;
 
 typedef struct {
+    uint8_t a;
+    uint8_t b;
+    uint8_t c;
+} ef945_char_triplet_t;
+
+typedef struct {
     union {
         uint8_t direct_regs[8];
         struct {
@@ -212,6 +218,7 @@ typedef struct {
     ef9345_char_code_t char_code;
     uint8_t block_origin;
     uint8_t origin_row_yor;
+    ef945_char_triplet_t row_buffer[40]; // TODO to verify when implementing the 80 char mode
 
     uint16_t fb_width;
     uint16_t fb_height;
@@ -372,6 +379,16 @@ static uint16_t _ef9345_ap_to_physical_address(ef9345_t* ef9345) {
                       ((ef9345->direct_r4 & 0x20) >> 4) | // d'0 on bit 1
                       ((ef9345->direct_r6 & 0x40) >> 4);  // d'1 on bit 2 
     uint16_t address = low_x | transcoded | (high_z << 11);
+
+    return address;
+}
+
+static uint16_t _ef9345_triplet_to_physical_address(uint8_t x, uint8_t y, uint8_t z) {
+    uint16_t transcoded = _ef9345_transcode_physical_address(x & 0x3f, y & 0x1f, z & 1);
+    uint16_t low_x = x & 0x07;
+    uint16_t high_z = z & 0b1110;
+
+    uint16_t address = low_x | transcoded | (high_z << 10);
 
     return address;
 }
@@ -616,6 +633,114 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     return vdp_pins;
 }
 
+static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
+    // TODO: implement copy for the service row
+
+    const uint8_t actual_row = (ef9345->origin_row_yor + row) % 24;
+    const uint8_t block_origin = ef9345->block_origin;
+
+    uint8_t latched_underline = 0;
+    uint8_t latched_conceal  = 0;
+    uint8_t latched_insert = 0;
+    uint8_t latched_background_color = 0;
+
+    for (uint8_t x = 0; x < 40; x++) {
+        const uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, block_origin);
+        const uint8_t data_a_prime = mem_rd(&ef9345->mem, address);
+        const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+
+        const bool is_del = (data_b_prime & 0b11100000) == 0b10000000; // TODO: should a_prime 8th bit also be a 1?
+
+        uint8_t data_a;
+        uint8_t data_b;
+        uint8_t data_c;
+   
+        if (is_del) {
+            latched_underline = (data_b_prime & 0b00000100) << 2;
+            latched_insert    = (data_b_prime & 0b00000010) >> 1;
+            latched_conceal   = (data_b_prime & 0b00000001) << 2;
+            data_c = 0;
+            data_b = 0b00100000 | latched_underline | latched_conceal | latched_insert;
+            data_a = data_a_prime;
+        }
+        else {
+            const bool is_graph = data_a_prime & 0x80;
+            const uint8_t in_ram = data_b_prime & 0x80;
+            if (is_graph) {
+                data_a = data_a_prime & 0x7f;
+                latched_background_color = data_a & 0b111;
+
+                data_b = in_ram | 0b00100000 | latched_conceal | latched_insert;
+            }
+            else {
+                const uint8_t color    = (data_a_prime & 0b00000111) << 4;
+                const uint8_t flash    = (data_a_prime & 0b00001000);
+                const uint8_t height   = (data_a_prime & 0b00010000) >> 3;
+                const uint8_t width    = (data_a_prime & 0b00100000) >> 1;
+                const uint8_t negative = (data_a_prime & 0b01000000) << 1;
+                const uint8_t in_ram   = (data_b_prime & 0b10000000);
+                data_a = negative | color | flash | latched_background_color;
+                data_b = in_ram | latched_underline | width | latched_conceal | height | latched_insert;
+            }
+            data_c = data_b;
+        }
+
+        ef9345->row_buffer[x] = (ef945_char_triplet_t) {data_a, data_b, data_c};
+    }
+}
+
+static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t row) {
+    // TODO: implement copy for the service row
+
+    uint8_t actual_row = (ef9345->origin_row_yor + row) % 24;
+
+    for (uint8_t x = 0; x < 40; x++) {
+        uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, ef9345->block_origin);
+        uint8_t data_c = mem_rd(&ef9345->mem, address);
+        uint8_t data_b = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+        uint8_t data_a = mem_rd(&ef9345->mem, address + 0x1000); // TODO: verify if memory should wrap
+        ef9345->row_buffer[x].a = data_a;
+        ef9345->row_buffer[x].b = data_b;
+        ef9345->row_buffer[x].c = data_c;
+    }
+}
+
+static void _ef9345_load_char_row_40_var(ef9345_t* ef9345, uint8_t row) {
+    CHIPS_ASSERT(0 && "EF9345: 40 var char mode not implemented"); // TODO: implement
+}
+
+static void _ef9345_load_char_row_80_short(ef9345_t* ef9345, uint8_t row) {
+    CHIPS_ASSERT(0 && "EF9345: 80 short char mode not implemented"); // TODO: implement
+}
+
+static void _ef9345_load_char_row_80_long(ef9345_t* ef9345, uint8_t row) {
+    CHIPS_ASSERT(0 && "EF9345: 80 long char mode not implemented"); // TODO: implement
+}
+
+
+static void _ef9345_load_char_row(ef9345_t* ef9345, uint8_t row) {
+    switch (ef9345->char_code) {
+        case EF9345_CHAR_CODE_40_SHORT:
+            _ef9345_load_char_row_40_short(ef9345, row);
+            break;
+        case EF9345_CHAR_CODE_40_LONG:
+            _ef9345_load_char_row_40_long(ef9345, row);
+            break;
+        case EF9345_CHAR_CODE_40_VAR:
+            _ef9345_load_char_row_40_var(ef9345, row);
+            break;
+        case EF9345_CHAR_CODE_80_SHORT:
+            _ef9345_load_char_row_80_short(ef9345, row);
+            break;
+        case EF9345_CHAR_CODE_80_LONG:
+            _ef9345_load_char_row_80_long(ef9345, row);
+            break;
+        default:
+            CHIPS_ASSERT(0 && "EF9345: Unknown character code");
+            break;
+    }
+}
+
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     const uint16_t last_scan_line = ef9345->lines_per_frame;
 
@@ -639,8 +764,16 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
         vdp_pins |= EF9345_MASK_HVS_HS;
     }
 
-    uint16_t active_scan_lines = 250;
-    uint16_t first_active_line = last_scan_line - active_scan_lines;
+    const uint16_t active_scan_lines = 250;
+    const uint16_t first_active_line = last_scan_line - active_scan_lines;
+
+    // Loads the next character row in intermediary buffer during the last line of a row
+    // TODO: be closer to actual loading timings.
+    if ((ef9345->current_line > first_active_line - 1) && (ef9345->current_line + 1) % 10 == 0) {
+        uint8_t row = (ef9345->current_line - first_active_line) / 10;
+        _ef9345_load_char_row(ef9345, row);
+    }
+
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
     if (ef9345->current_line >= first_active_line && ef9345->current_line < last_scan_line) {
         // Active lines
