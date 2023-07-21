@@ -206,8 +206,12 @@ typedef struct {
     bool execution_flag; // true when execution was requested by XQR
 
     /* Video RAM */
-    mem_t mem;  // Access to Video RAM
-    uint8_t ram[0x2000]; // Video RAM
+    mem_t mem;              // Access to Video RAM
+    uint8_t ram[0x2000];    // Video RAM
+
+    /* Charset ROM */
+    mem_t charset_mem;      // Access to Charset ROM
+    uint8_t rom[0x2000];    // Charset ROM
 
     /* Frame update */
     uint16_t line_tick;
@@ -256,7 +260,7 @@ typedef struct {
 //
 
 /* initialize a new ef9345 instance */
-void ef9345_init(ef9345_t *ef9345);
+void ef9345_init(ef9345_t *ef9345, chips_range_t* charset_range);
 /* reset an existing ef9345 instance */
 void ef9345_reset(ef9345_t *ef9345);
 /* tick the ef9345 instance, returns the pins of the simulated ef9345 */
@@ -275,11 +279,12 @@ uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
 #endif
 
 static void _ef9345_init_memory_map(ef9345_t* ef9345);
+static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, chips_range_t* charset_range);
 static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins);
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
 static void _ef9345_recompute_configuration(ef9345_t* ef9345);
 
-void ef9345_init(ef9345_t* ef9345) {
+void ef9345_init(ef9345_t* ef9345, chips_range_t* charset_range) {
     CHIPS_ASSERT(ef9345);
     memset(ef9345, 0, sizeof(*ef9345));
 
@@ -288,11 +293,15 @@ void ef9345_init(ef9345_t* ef9345) {
     ef9345->fb_size = EF9345_FRAMEBUFFER_SIZE;
 
     _ef9345_init_memory_map(ef9345);
+
+    if (charset_range) {
+        _ef9345_init_charset_memory_map(ef9345, charset_range);
+    }
 }
 
 void ef9345_reset(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
-    ef9345_init(ef9345);
+    ef9345_init(ef9345, NULL);
 }
 
 // The horizontal line takes 64µs to display
@@ -323,6 +332,14 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
     _ef9345_recompute_configuration(ef9345);
 }
+
+static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, chips_range_t* charset_range) {
+    memcpy(ef9345->rom, charset_range->ptr, charset_range->size);
+
+    mem_init(&ef9345->charset_mem);
+    mem_map_rom(&ef9345->charset_mem, 0, 0x0000, 0x2000, ef9345->rom);
+}
+
 
 static uint16_t _ef9345_transcode_physical_address(uint16_t x, uint16_t y, uint16_t b0) {
     uint16_t address = 0;
@@ -770,16 +787,22 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     const uint16_t active_scan_lines = 250;
     const uint16_t first_active_line = last_scan_line - active_scan_lines;
 
-    // Loads the next character row in intermediary buffer during the last line of a row
+    // Loads the next character row in intermediary buffer during the start of a row
     // TODO: be closer to actual loading timings.
-    // TODO: by doing it at this moment, the last line row of the current char row will be corrupted, are there
-    // two buffers ?
+    // TODO: the loading should start one line before, but by doing it at this moment,
+    // the last line row of the current char row will be corrupted, are there two buffers ?
+    // As we need previous information of character for double height, it's probable there are
+    // two alternating buffers.
     if (ef9345->latest_loaded_row_line != ef9345->current_line) {
         ef9345->latest_loaded_row_line = ef9345->current_line;
+
+        const uint16_t next_line = ef9345->current_line;
         
-        if ((ef9345->current_line > first_active_line - 1) && (ef9345->current_line + 1) % 10 == 0) {
-            uint8_t row = ((ef9345->current_line + 1) - first_active_line) / 10;
-            _ef9345_load_char_row(ef9345, row);
+        if ((next_line >= first_active_line && (next_line % 10) == 0)) {
+            uint8_t row = (next_line - first_active_line) / 10;
+            if (row < 24) {
+                _ef9345_load_char_row(ef9345, row);
+            }
         }
     }
 
@@ -792,22 +815,43 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
 
             if (x != ef9345->latest_rendered_column) {
                 ef9345->latest_rendered_column = x;
-                const uint8_t char_from_buffer = ef9345->row_buffer[x].c;
+
+                // At now, only bicolor 40 char/row is supported
+                const uint8_t char_from_buffer = (ef9345->row_buffer[x].c) & 0x7f;
+                //const uint8_t char_from_buffer = x + 64;
                 const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
 
-                uint32_t address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
-                uint8_t value = colors_from_buffer & 0b111;
-                if (char_from_buffer > 32 && char_from_buffer < 128) {
-                    value = (colors_from_buffer & 0b1110000) >> 4;
+                uint32_t fb_address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
+
+                const uint8_t bg_color = colors_from_buffer & 0b111;
+                const uint8_t fg_color = (colors_from_buffer & 0b1110000) >> 4;
+
+                if (char_from_buffer == 0x00) {
+                    // DEL character
+                    for (size_t pixel = 0; pixel < 8; pixel++) {
+                        ef9345->fb[fb_address++] = bg_color;
+                    }
                 }
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
-                ef9345->fb[address++] = value;
+                else {
+                    const uint16_t char_offset = ((char_from_buffer & 0x7f) >> 2) * 0x40 +
+                                                (char_from_buffer & 0x03);
+                    const uint16_t base_char_address = 0x0800;
+                    const uint16_t slice_address = base_char_address +
+                                                char_offset +
+                                                ((ef9345->current_line % 10) * 4);
+
+                    uint16_t slice_value = mem_rd(&ef9345->charset_mem, slice_address);
+
+                    if (ef9345->current_line % 10 == 9) {
+                        slice_value = 0xff;
+                    }
+
+                    for (size_t pixel = 0; pixel < 8; pixel++) {
+                        uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
+                        ef9345->fb[fb_address++] = value;
+                        slice_value >>= 1;
+                    }
+                }
             }
         }
     }
