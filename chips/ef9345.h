@@ -220,6 +220,9 @@ typedef struct {
     uint8_t origin_row_yor;
     ef945_char_triplet_t row_buffer[40]; // TODO to verify when implementing the 80 char mode
 
+    uint8_t latest_loaded_row_line;
+    uint8_t latest_rendered_column;
+
     uint16_t fb_width;
     uint16_t fb_height;
     uint32_t fb_size;
@@ -767,22 +770,18 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     const uint16_t active_scan_lines = 250;
     const uint16_t first_active_line = last_scan_line - active_scan_lines;
 
-    static uint16_t latest_line = 0; // TODO: moves this out of static storage
-
     // Loads the next character row in intermediary buffer during the last line of a row
     // TODO: be closer to actual loading timings.
     // TODO: by doing it at this moment, the last line row of the current char row will be corrupted, are there
     // two buffers ?
-    if (latest_line != ef9345->current_line) {
-        latest_line = ef9345->current_line;
+    if (ef9345->latest_loaded_row_line != ef9345->current_line) {
+        ef9345->latest_loaded_row_line = ef9345->current_line;
         
         if ((ef9345->current_line > first_active_line - 1) && (ef9345->current_line + 1) % 10 == 0) {
             uint8_t row = ((ef9345->current_line + 1) - first_active_line) / 10;
             _ef9345_load_char_row(ef9345, row);
         }
     }
-
-    static uint8_t latest_x = 0; // TODO: moves this out of static storage
 
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
     if (ef9345->current_line >= first_active_line && ef9345->current_line < last_scan_line) {
@@ -791,8 +790,8 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
             // Active display time
             const uint8_t x = ef9345->line_tick / tick_for_1mus;
 
-            if (x != latest_x) {
-                latest_x = x;
+            if (x != ef9345->latest_rendered_column) {
+                ef9345->latest_rendered_column = x;
                 const uint8_t char_from_buffer = ef9345->row_buffer[x].c;
                 const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
 
