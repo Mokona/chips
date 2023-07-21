@@ -376,6 +376,7 @@ static uint16_t _ef9345_transcode_physical_address(uint16_t x, uint16_t y, uint1
 static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
     // See Figure 11 and Table 2 from the datasheet 
     uint16_t x = ef9345->direct_r7 & 0x3f;
+    CHIPS_ASSERT(x < 40);
     uint16_t y = ef9345->direct_r6 & 0x1f;
     uint16_t b0 = (ef9345->direct_r7 & 0x80) >> 7;
     uint16_t transcoded = _ef9345_transcode_physical_address(x, y, b0);
@@ -390,6 +391,7 @@ static uint16_t _ef9345_mp_to_physical_address(ef9345_t* ef9345) {
 
 static uint16_t _ef9345_ap_to_physical_address(ef9345_t* ef9345) {
     uint16_t x = ef9345->direct_r5 & 0x3f;
+    CHIPS_ASSERT(x < 40);
     uint16_t y = ef9345->direct_r4 & 0x1f;
     uint16_t b0_prime = (ef9345->direct_r5 & 0x80) >> 7;
     uint16_t transcoded = _ef9345_transcode_physical_address(x, y, b0_prime);
@@ -461,11 +463,11 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
 
                     if (is_read) {
                         ef9345->direct_r1 = mem_rd(&ef9345->mem, address);
-                        ef9345->direct_r2 = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+                        ef9345->direct_r2 = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
                     }
                     else {
                         mem_wr(&ef9345->mem, address, ef9345->direct_r1);
-                        mem_wr(&ef9345->mem, address + 0x0800, ef9345->direct_r2); // TODO: verify if memory should wrap
+                        mem_wr(&ef9345->mem, address + 0x0400, ef9345->direct_r2); // TODO: verify if memory should wrap
                     }
                     // TODO: direct_r3 is used as a working register. It should be changed. But to what?
 
@@ -655,7 +657,9 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
 
 static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
     // TODO: implement copy for the service row
-    const uint8_t actual_row = (ef9345->origin_row_yor + row) % 24;
+
+    // Load for BULK
+    const uint8_t actual_row = ef9345->origin_row_yor + (row % 24);
     const uint8_t block_origin = ef9345->block_origin;
 
     uint8_t latched_underline = 0;
@@ -666,7 +670,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
     for (uint8_t x = 0; x < 40; x++) {
         const uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, block_origin);
         const uint8_t data_a_prime = mem_rd(&ef9345->mem, address); // TODO: high cost to use a "mem", use a directly accessed buffer? As there' no paging
-        const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+        const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
 
         const bool is_del = (data_b_prime & 0b11100000) == 0b10000000; // TODO: should a_prime 8th bit also be a 1?
 
@@ -717,8 +721,8 @@ static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t row) {
     for (uint8_t x = 0; x < 40; x++) {
         uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, ef9345->block_origin);
         uint8_t data_c = mem_rd(&ef9345->mem, address);
-        uint8_t data_b = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
-        uint8_t data_a = mem_rd(&ef9345->mem, address + 0x1000); // TODO: verify if memory should wrap
+        uint8_t data_b = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
+        uint8_t data_a = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
         ef9345->row_buffer[x].a = data_a;
         ef9345->row_buffer[x].b = data_b;
         ef9345->row_buffer[x].c = data_c;
@@ -841,10 +845,6 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
                                                 ((ef9345->current_line % 10) * 4);
 
                     uint16_t slice_value = mem_rd(&ef9345->charset_mem, slice_address);
-
-                    if (ef9345->current_line % 10 == 9) {
-                        slice_value = 0xff;
-                    }
 
                     for (size_t pixel = 0; pixel < 8; pixel++) {
                         uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
