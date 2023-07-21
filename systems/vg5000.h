@@ -54,6 +54,7 @@ typedef struct {
     struct {
         chips_range_t vg5000_10;
         chips_range_t vg5000_11;
+        chips_range_t ef9345_charset;
     } roms;
 } vg5000_desc_t;
 
@@ -131,7 +132,7 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     sys->freq_hz = VG5000_FREQUENCY;
     sys->debug = desc->debug;
 
-    ef9345_init(&sys->vdp);
+    ef9345_init(&sys->vdp, &desc->roms.ef9345_charset);
 
     memcpy(sys->rom, desc->roms.vg5000_11.ptr, desc->roms.vg5000_11.size);
     _vg5000_init_memory_map(sys);
