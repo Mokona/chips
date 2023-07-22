@@ -252,8 +252,7 @@ void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64
     *service_bus = local_service_bus;
 }
 
-uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
-{
+uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
 
     // TODO: update beeper
@@ -302,9 +301,8 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
             uint64_t cpu_a0_a1_mask = Z80_A0 | Z80_A1 | Z80_A2;
             uint8_t key_line = (cpu_pins & cpu_a0_a1_mask) >> Z80_PIN_A0;
 
-            // No key is pressed at the moment
-            // TODO: implement keypress
-            Z80_SET_DATA(cpu_pins, 0xFF);
+            uint16_t columns = kbd_test_lines(&sys->kbd, 1 << key_line);
+            Z80_SET_DATA(cpu_pins, ~columns);
         }
     }
 
@@ -321,8 +319,7 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins)
     return cpu_pins;
 }
 
-uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds)
-{
+uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds) {
     CHIPS_ASSERT(sys && sys->valid);
     uint32_t num_ticks = clk_us_to_ticks(VG5000_FREQUENCY, micro_seconds);
     uint64_t pins = sys->cpu_pins;
@@ -342,27 +339,31 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds)
     sys->cpu_pins = pins;
     kbd_update(&sys->kbd, micro_seconds);
     return num_ticks;
-
 }
 
-void vg5000_key_down(vg5000_t* sys, int key_code)
-{}
+void vg5000_key_down(vg5000_t* sys, int key_code) {
+    // if (key_code >= 32) {
+    //     printf("Key down char: %c\n", key_code);
+    // } else printf("Key down: %i\n", key_code);
+    kbd_key_down(&sys->kbd, key_code);
+}
 
-void vg5000_key_up(vg5000_t* sys, int key_code)
-{}
+void vg5000_key_up(vg5000_t* sys, int key_code) {
+    // if (key_code >= 32) {
+    //     printf("Key up char: %c\n", key_code);
+    // } else printf("Key up: %i\n", key_code);
+    kbd_key_up(&sys->kbd, key_code);
+}
 
-bool vg5000_quickload(vg5000_t* sys, chips_range_t data)
-{
+bool vg5000_quickload(vg5000_t* sys, chips_range_t data) {
     return false;
 }
 
-uint32_t vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst)
-{
+uint32_t vg5000_save_snapshot(vg5000_t* sys, vg5000_t* dst) {
     return 0;
 }
 
-bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src)
-{
+bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src) {
     return false;
 }
 
@@ -375,61 +376,59 @@ static void _vg5000_init_memory_map(vg5000_t* sys) {
     mem_map_ram(&sys->mem, 0, 0xC000, 0x4000, sys->ram[2]);
 }
 
-static void _vg5000_init_keyboard_matrix(vg5000_t* sys)
-{
+static void _vg5000_init_keyboard_matrix(vg5000_t* sys) {
     kbd_init(&sys->kbd, 1);
-    kbd_register_modifier(&sys->kbd, 0, 2, 0);
+    kbd_register_modifier(&sys->kbd, 0, 0, 2);
     // kbd_register_modifier(&sys->kbd, 0, 2, 0);
 
-
     const char* keymap =
-        /* no shift */
-       /* no shift */
-        "        "
+        // no shift
+        "        " // 8 column per line
         "A     Q "
         "Z:1BVCXW"
         ";26543ES"
         "POIUGF*/" // * -> ×
         "987, ]0 "
         "D <YTR+-"
-        "MLKHJN ="
+        "MLKHJN =" // 8 lines
 
         // shift
         "        "
         "a     q "
         "z*#bvcxw"
-        "@!%%$£\"es"
-        "poiugfx/" // / -> ÷
-        "(/&/ [) " // twice / ?
-        "d >ytr+?" // shift+ -> ?
+        "@!%$ \"es" // misses £
+        "poiugf*/" //  -> × and ÷ ?
+        "(/&  [) " // twice / ?
+        "d >ytr.?"
         "mlkhjn ^";
 
     for (int layer = 0; layer < 2; layer++) {
-        for (int column = 0; column < 8; column++) {
-            for (int line = 0; line < 8; line++) {
-                const uint8_t c = keymap[layer*64 + column*8 + line];
+        for (int line = 0; line < 8; line++) {
+            for (int column = 0; column < 8; column++) {
+                const uint8_t c = keymap[layer*64 + line*8 + column];
                 if (c != 0x20) {
-                    kbd_register_key(&sys->kbd, c, column, line, (layer>0) ? (1<<(layer-1)) : 0);
+                    kbd_register_key(&sys->kbd, c, line, 7 - column, (layer>0) ? (1<<(layer-1)) : 0);
                 }
             }
         }
     }
+//    kbd_register_key(&sys->kbd, 65, 1, 7, 0);
 
     // special keys
-    // TODO: understand and fix the key codes
-    kbd_register_key(&sys->kbd, 0x0F, 7, 0, 0); // INS
-    kbd_register_key(&sys->kbd, 0x08, 6, 0, 0); // CTRL
-    kbd_register_key(&sys->kbd, 0x0A, 5, 0, 0); // Cursor Down
-    kbd_register_key(&sys->kbd, 0x0B, 4, 0, 0); // Cursor Right
-    kbd_register_key(&sys->kbd, 0x0B, 3, 0, 0); // Cursor Left
-    kbd_register_key(&sys->kbd, 0x0B, 2, 0, 0); // ???
-    kbd_register_key(&sys->kbd, 0x09, 0, 0, 0); // LIST
-    kbd_register_key(&sys->kbd, 0x09, 6, 1, 0); // Cursor Up
-    kbd_register_key(&sys->kbd, 0x0C, 5, 1, 0); // RET
-    kbd_register_key(&sys->kbd, 0x0D, 3, 1, 0); // CAPS LOCK
-    kbd_register_key(&sys->kbd, ' ', 2, 1, 0); // ESP
-    kbd_register_key(&sys->kbd, 0x0E, 6, 6, 0); // PRT
-    kbd_register_key(&sys->kbd, 0x0E, 7, 1, 0); // EFF
+    // TODO: complete the key codes
+    kbd_register_key(&sys->kbd, 0x08, 0, 3, 0); // Cursor Left
+    kbd_register_key(&sys->kbd, 0x09, 0, 4, 0); // Cursor Right
+    kbd_register_key(&sys->kbd, 0x0a, 0, 5, 0); // Cursor Down
+    kbd_register_key(&sys->kbd, ' ' , 1, 2, 0); // ESP
+    kbd_register_key(&sys->kbd, 0x0d, 1, 5, 0); // RET
+    kbd_register_key(&sys->kbd, 0x0b, 1, 6, 0); // Cursor Up
+    // kbd_register_key(&sys->kbd, 0x0F, 7, 0, 0); // INS
+    // kbd_register_key(&sys->kbd, 0x08, 6, 0, 0); // CTRL
+    // kbd_register_key(&sys->kbd, 0x0B, 2, 0, 0); // ???
+    // kbd_register_key(&sys->kbd, 0x09, 0, 0, 0); // LIST
+    // kbd_register_key(&sys->kbd, 0x0D, 3, 1, 0); // CAPS LOCK
+    // kbd_register_key(&sys->kbd, 0x0E, 6, 6, 0); // PRT
+    // kbd_register_key(&sys->kbd, 0x0E, 7, 1, 0); // EFF
     // TODO: Add the Triangle Key
 
 }
