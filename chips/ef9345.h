@@ -742,7 +742,6 @@ static void _ef9345_load_char_row_80_long(ef9345_t* ef9345, uint8_t row) {
     CHIPS_ASSERT(0 && "EF9345: 80 long char mode not implemented"); // TODO: implement
 }
 
-
 static void _ef9345_load_char_row(ef9345_t* ef9345, uint8_t row) {
     switch (ef9345->char_code) {
         case EF9345_CHAR_CODE_40_SHORT:
@@ -763,6 +762,106 @@ static void _ef9345_load_char_row(ef9345_t* ef9345, uint8_t row) {
         default:
             CHIPS_ASSERT(0 && "EF9345: Unknown character code");
             break;
+    }
+}
+
+static void _ef9345_compute_quadrant_for_row(ef9345_t* ef9345, uint8_t row) {
+    // Compute quadrant for double width/height
+    for (uint8_t x = 0; x < 40; x++) {
+        const bool is_double_height = ef9345->row_buffer[x].b & 0x02;
+        const bool is_double_width = ef9345->row_buffer[x].b & 0x08;
+        const bool is_double_size = is_double_height && is_double_width;
+
+        // Check quadrant
+        // 0 : normal size
+        // 5 6
+        // 9 A: double size
+        // 1 2 : double width
+        // 4
+        // 8 : double height
+        uint8_t quadrant = 0;
+
+        if (x > 0)
+        {
+            if (ef9345->quadrant_buffer[x-1] == 5 && is_double_size) {
+                quadrant = 6;
+            }
+            else if (ef9345->quadrant_buffer[x-1] == 9 && is_double_size) {
+                quadrant = 0xA;
+            }
+            else if (ef9345->quadrant_buffer[x-1] == 1 && is_double_width) {
+                quadrant = 2;
+            }
+            else if (ef9345->quadrant_buffer[x] == 4 && is_double_height) {
+                quadrant = 8;
+            }
+        }
+
+        if (quadrant == 0) {
+            if (is_double_size) {
+                if (ef9345->quadrant_buffer[x] == 5) {
+                    quadrant = 9;
+                }
+                else {
+                    quadrant = 5;
+                }
+            }
+            else if (is_double_width) {
+                quadrant = 1;
+            }
+            else if (is_double_height) {
+                quadrant = 4;
+            }
+        }
+
+        ef9345->quadrant_buffer[x] = quadrant;
+    }
+}
+
+static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t address) {
+    const uint8_t char_from_buffer = (ef9345->row_buffer[x].c) & 0x7f;
+    const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
+
+    const uint8_t bg_color = colors_from_buffer & 0b111;
+    const uint8_t fg_color = (colors_from_buffer & 0b1110000) >> 4;
+
+    if (char_from_buffer == 0x00) {
+        // DEL character
+        for (size_t pixel = 0; pixel < 8; pixel++) {
+            ef9345->fb[address++] = bg_color;
+        }
+    }
+    else {
+        // Render character
+        const uint8_t  quadrant = ef9345->quadrant_buffer[x];
+        const uint16_t char_offset = ((char_from_buffer & 0x7f) >> 2) * 0x40 +
+                                    (char_from_buffer & 0x03);
+        const uint16_t base_char_address = 0x0800;
+        const uint16_t slice_height_shift = quadrant & 0b1000 ? 5 : 0;
+        const uint16_t slice_number = ((ef9345->current_line % 10) / ((quadrant & 0b1100) ? 2 : 1)) +
+                                        slice_height_shift;
+        const uint16_t slice_address = base_char_address +
+                                    char_offset +
+                                    (slice_number * 4);
+
+        uint16_t slice_value = mem_rd(&ef9345->charset_mem, slice_address);
+
+        if (quadrant & 0x03) { // double width
+            if (quadrant & 0x02) { slice_value >>= 4; }
+            for (size_t pixel = 0; pixel < 8; pixel+=2) {
+                uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
+                ef9345->fb[address++] = value;
+                ef9345->fb[address++] = value;
+                slice_value >>= 1;
+            }
+        }
+        else {
+            for (size_t pixel = 0; pixel < 8; pixel++) {
+                uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
+                ef9345->fb[address++] = value;
+                slice_value >>= 1;
+            }
+        }
     }
 }
 
@@ -812,57 +911,7 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
 
             if (current_row < 24) {
                 _ef9345_load_char_row(ef9345, current_row);
-
-                // Compute quadrant for double width/height
-                for (uint8_t x = 0; x < 40; x++) {
-                    const bool is_double_height = ef9345->row_buffer[x].b & 0x02;
-                    const bool is_double_width = ef9345->row_buffer[x].b & 0x08;
-                    const bool is_double_size = is_double_height && is_double_width;
-
-                    // Check quadrant
-                    // 0 : normal size
-                    // 5 6
-                    // 9 A: double size
-                    // 1 2 : double width
-                    // 4
-                    // 8 : double height
-                    uint8_t quadrant = 0;
-
-                    if (x > 0)
-                    {
-                        if (ef9345->quadrant_buffer[x-1] == 5 && is_double_size) {
-                            quadrant = 6;
-                        }
-                        else if (ef9345->quadrant_buffer[x-1] == 9 && is_double_size) {
-                            quadrant = 0xA;
-                        }
-                        else if (ef9345->quadrant_buffer[x-1] == 1 && is_double_width) {
-                            quadrant = 2;
-                        }
-                        else if (ef9345->quadrant_buffer[x] == 4 && is_double_height) {
-                            quadrant = 8;
-                        }
-                    }
-
-                    if (quadrant == 0) {
-                        if (is_double_size) {
-                            if (ef9345->quadrant_buffer[x] == 5) {
-                                quadrant = 9;
-                            }
-                            else {
-                                quadrant = 5;
-                            }
-                        }
-                        else if (is_double_width) {
-                            quadrant = 1;
-                        }
-                        else if (is_double_height) {
-                            quadrant = 4;
-                        }
-                    }
-
-                    ef9345->quadrant_buffer[x] = quadrant;
-                }
+                _ef9345_compute_quadrant_for_row(ef9345, current_row);
             }
         }
     }
@@ -877,53 +926,10 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
             if (x != ef9345->latest_rendered_column) {
                 ef9345->latest_rendered_column = x;
 
-                // At now, only bicolor alpha 40 char/row is supported
-                const uint8_t char_from_buffer = (ef9345->row_buffer[x].c) & 0x7f;
-                const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
-
                 uint32_t fb_address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
 
-                const uint8_t bg_color = colors_from_buffer & 0b111;
-                const uint8_t fg_color = (colors_from_buffer & 0b1110000) >> 4;
-
-                if (char_from_buffer == 0x00) {
-                    // DEL character
-                    for (size_t pixel = 0; pixel < 8; pixel++) {
-                        ef9345->fb[fb_address++] = bg_color;
-                    }
-                }
-                else {
-                    // Render character
-                    const uint8_t  quadrant = ef9345->quadrant_buffer[x];
-                    const uint16_t char_offset = ((char_from_buffer & 0x7f) >> 2) * 0x40 +
-                                                (char_from_buffer & 0x03);
-                    const uint16_t base_char_address = 0x0800;
-                    const uint16_t slice_height_shift = quadrant & 0b1000 ? 5 : 0;
-                    const uint16_t slice_number = ((ef9345->current_line % 10) / ((quadrant & 0b1100) ? 2 : 1)) +
-                                                  slice_height_shift;
-                    const uint16_t slice_address = base_char_address +
-                                                char_offset +
-                                                (slice_number * 4);
-
-                    uint16_t slice_value = mem_rd(&ef9345->charset_mem, slice_address);
-
-                    if (quadrant & 0x03) {
-                        if (quadrant & 0x02) { slice_value >>= 4; }
-                        for (size_t pixel = 0; pixel < 8; pixel+=2) {
-                            uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
-                            ef9345->fb[fb_address++] = value;
-                            ef9345->fb[fb_address++] = value;
-                            slice_value >>= 1;
-                        }
-                    }
-                    else {
-                        for (size_t pixel = 0; pixel < 8; pixel++) {
-                            uint8_t value = (slice_value & 0x01) ? fg_color : bg_color;
-                            ef9345->fb[fb_address++] = value;
-                            slice_value >>= 1;
-                        }
-                    }
-                }
+                // At now, only bicolor alpha 40 char/row is supported
+                _ef9345_render_8x10_alpha_char(ef9345, x, fb_address);
             }
         }
     }
