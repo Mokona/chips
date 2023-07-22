@@ -656,11 +656,16 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     return vdp_pins;
 }
 
-static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
-    // TODO: implement copy for the service row
+static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t screen_row) {
+    uint8_t actual_row;
+    if (screen_row > 0) {
+        actual_row = ef9345->origin_row_yor + screen_row - 1;
+        while (actual_row > 31) { actual_row -= 24; }
+    }
+    else {
+        actual_row = 0; // TODO: in fact, the selected service row
+    }
 
-    // Load for BULK
-    const uint8_t actual_row = ef9345->origin_row_yor + (row % 24);
     const uint8_t block_origin = ef9345->block_origin;
 
     uint8_t latched_underline = 0;
@@ -670,7 +675,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
 
     for (uint8_t x = 0; x < 40; x++) {
         const uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, block_origin);
-        const uint8_t data_a_prime = mem_rd(&ef9345->mem, address); // TODO: high cost to use a "mem", use a directly accessed buffer? As there' no paging
+        const uint8_t data_a_prime = mem_rd(&ef9345->mem, address);
         const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
 
         const bool is_del = (data_b_prime & 0b11100000) == 0b10000000; // TODO: should a_prime 8th bit also be a 1?
@@ -714,10 +719,15 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t row) {
     }
 }
 
-static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t row) {
-    // TODO: implement copy for the service row
-
-    uint8_t actual_row = (ef9345->origin_row_yor + row) % 24;
+static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t screen_row) {
+    uint8_t actual_row;
+    if (screen_row > 0) {
+        actual_row = ef9345->origin_row_yor + screen_row - 1;
+        while (actual_row > 31) { actual_row -= 24; }
+    }
+    else {
+        actual_row = 0; // TODO: in fact, the selected service row
+    }
 
     for (uint8_t x = 0; x < 40; x++) {
         uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, ef9345->block_origin);
@@ -765,7 +775,7 @@ static void _ef9345_load_char_row(ef9345_t* ef9345, uint8_t row) {
     }
 }
 
-static void _ef9345_compute_quadrant_for_row(ef9345_t* ef9345, uint8_t row) {
+static void _ef9345_compute_quadrant_for_row(ef9345_t* ef9345) {
     // Compute quadrant for double width/height
     for (uint8_t x = 0; x < 40; x++) {
         const bool is_double_height = ef9345->row_buffer[x].b & 0x02;
@@ -818,15 +828,21 @@ static void _ef9345_compute_quadrant_for_row(ef9345_t* ef9345, uint8_t row) {
     }
 }
 
-static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t address) {
+static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t address, bool is_cursor) {
     const uint8_t char_from_buffer = (ef9345->row_buffer[x].c) & 0x7f;
     const uint8_t colors_from_buffer = ef9345->row_buffer[x].a;
 
     const uint8_t bg_color = colors_from_buffer & 0b111;
     const uint8_t fg_color = (colors_from_buffer & 0b1110000) >> 4;
 
+    // TODO: precompute this copy/pasted block
+    const uint16_t last_scan_line = ef9345->lines_per_frame;
+    const uint16_t active_scan_lines = 250;
+    const uint16_t first_active_line = last_scan_line - active_scan_lines;
+    const uint16_t row_line = (ef9345->current_line - first_active_line) % 10;
+
     if (char_from_buffer == 0x00) {
-        // DEL character
+        // TODO: implement attributes for DEL
         for (size_t pixel = 0; pixel < 8; pixel++) {
             ef9345->fb[address++] = bg_color;
         }
@@ -838,13 +854,17 @@ static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t
                                     (char_from_buffer & 0x03);
         const uint16_t base_char_address = 0x0800;
         const uint16_t slice_height_shift = quadrant & 0b1000 ? 5 : 0;
-        const uint16_t slice_number = ((ef9345->current_line % 10) / ((quadrant & 0b1100) ? 2 : 1)) +
+        const uint16_t slice_number = (row_line / ((quadrant & 0b1100) ? 2 : 1)) +
                                         slice_height_shift;
         const uint16_t slice_address = base_char_address +
                                     char_offset +
                                     (slice_number * 4);
 
         uint16_t slice_value = mem_rd(&ef9345->charset_mem, slice_address);
+
+        if (is_cursor) {
+            slice_value = ~slice_value;
+        }
 
         if (quadrant & 0x03) { // double width
             if (quadrant & 0x02) { slice_value >>= 4; }
@@ -891,28 +911,21 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     const uint16_t active_scan_lines = 250;
     const uint16_t first_active_line = last_scan_line - active_scan_lines;
     const uint16_t next_line = ef9345->current_line;
-    const int16_t  current_row = (next_line - first_active_line) / 10;
-
+    const int16_t  current_row = (next_line - first_active_line) / 10; // Warning, 0 is the service row
 
     // Loads the next character row in intermediary buffer during the start of a row
     // TODO: be closer to actual loading timings.
     // TODO: the loading should start one line before, but by doing it at this moment,
     // the last line row of the current char row will be corrupted, are there two buffers ?
-    // As we need previous information of character for double height, it's probable there are
-    // two alternating buffers.
-    if (ef9345->latest_loaded_row_line != ef9345->current_line) {
-        ef9345->latest_loaded_row_line = ef9345->current_line;
+    if (current_row >= 0 && ef9345->latest_loaded_row_line != current_row) {
+        ef9345->latest_loaded_row_line = current_row;
         
-        if ((next_line >= first_active_line && (next_line % 10) == 0)) {
-
-            if (current_row == 0) {
-                memset(ef9345->quadrant_buffer, 0, sizeof(ef9345->quadrant_buffer));
-            }
-
-            if (current_row < 24) {
-                _ef9345_load_char_row(ef9345, current_row);
-                _ef9345_compute_quadrant_for_row(ef9345, current_row);
-            }
+        if (current_row == 0) {
+            memset(ef9345->quadrant_buffer, 0, sizeof(ef9345->quadrant_buffer));
+        }
+        if (current_row < 25) {
+            _ef9345_load_char_row(ef9345, current_row);
+            _ef9345_compute_quadrant_for_row(ef9345);
         }
     }
 
@@ -927,9 +940,29 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
                 ef9345->latest_rendered_column = x;
 
                 uint32_t fb_address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
+                if (current_row == 0) {
+                    bool display_cursor = false;
+                    if (ef9345->indirect_mat & 0b01000000) {
+                        uint8_t cursor_x = ef9345->direct_r7 & 0x3f;
+                        uint8_t cursor_y = ef9345->direct_r6 & 0x1f;
+                        display_cursor = (cursor_x == x && cursor_y == 0); // TODO: in fact, depends on the current selected service row
+                    }
+                    _ef9345_render_8x10_alpha_char(ef9345, x, fb_address, display_cursor);
+                }
+                else {
+                    // Bulk
+                    bool display_cursor = false;
+                    if (ef9345->indirect_mat & 0b01000000) {
+                        uint8_t actual_y = (ef9345->origin_row_yor + current_row - 1);
+                        while (actual_y > 31) { actual_y -= 24; }
 
-                // At now, only bicolor alpha 40 char/row is supported
-                _ef9345_render_8x10_alpha_char(ef9345, x, fb_address);
+                        uint8_t cursor_x = ef9345->direct_r7 & 0x3f;
+                        uint8_t cursor_y = ef9345->direct_r6 & 0x1f;
+                        display_cursor = (cursor_y >= 8) && (cursor_x == x && cursor_y == actual_y);
+                    }
+                    // At now, only bicolor alpha 40 char/row is supported
+                    _ef9345_render_8x10_alpha_char(ef9345, x, fb_address, display_cursor);
+                }
             }
         }
     }
