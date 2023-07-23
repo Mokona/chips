@@ -276,6 +276,11 @@ void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64
 uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
 
+    // 7814
+    // TODO: add external bus signal WAITE/
+    cpu_pins &= ~Z80_WAIT;
+    cpu_pins |= (cpu_pins & Z80_M1) >> Z80_PIN_M1 << Z80_PIN_WAIT;
+
     if (cpu_pins & Z80_MREQ) {
         // TODO: check memory mapping depending on the configuration
         const uint16_t addr = Z80_GET_ADDR(cpu_pins);
@@ -288,7 +293,6 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
         }
     }
 
-    // TODO: implement 7814, which adds a wait cycle
     // TODO: implement 7806, which implement memory adressing in case of extension
     
     // Decode EF9347 and K7 control signals
