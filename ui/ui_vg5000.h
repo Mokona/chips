@@ -300,18 +300,16 @@ void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
         UI_CHIP_INIT_DESC(&desc.chip_desc, "EF9345\nVDP", 30, _ui_ef9345_vdp_pins);
         ui_ef9345_init(&ui->vdp, &desc);
     }
-
-    // TODO: add audio debug
-    // x += dx; y += dy;
-    // {
-    //     ui_audio_desc_t desc = {0};
-    //     desc.title = "Audio Output";
-    //     desc.sample_buffer = ui->vg5000->audio.sample_buffer;
-    //     desc.num_samples = ui->vg5000->audio.num_samples;
-    //     desc.x = x;
-    //     desc.y = y;
-    //     ui_audio_init(&ui->audio, &desc);
-    // }
+    x += dx; y += dy;
+    {
+        ui_audio_desc_t desc = {0};
+        desc.title = "Audio Output";
+        desc.sample_buffer = ui->vg5000->audio.sample_buffer;
+        desc.num_samples = ui->vg5000->audio.num_samples;
+        desc.x = x;
+        desc.y = y;
+        ui_audio_init(&ui->audio, &desc);
+    }
     x += dx; y += dy;
     {
         ui_kbd_desc_t desc = {0};
@@ -382,8 +380,7 @@ void ui_vg5000_discard(ui_vg5000_t* ui) {
     ui->vg5000 = 0;
     ui_z80_discard(&ui->cpu);
     ui_ef9345_discard(&ui->vdp);
-    // TODO: support audio
-    // ui_audio_discard(&ui->audio);
+    ui_audio_discard(&ui->audio);
     ui_kbd_discard(&ui->kbd);
     ui_memmap_discard(&ui->memmap);
     for (int i = 0; i < 4; i++) {
@@ -401,8 +398,7 @@ void ui_vg5000_draw(ui_vg5000_t* ui) {
     if (ui->memmap.open) {
         _ui_vg5000_update_memmap(ui);
     }
-    // TODO: audio support
-    // ui_audio_draw(&ui->audio, ui->vg5000->audio.sample_pos);
+    ui_audio_draw(&ui->audio, ui->vg5000->audio.sample_pos);
     ui_z80_draw(&ui->cpu);
     ui_ef9345_draw(&ui->vdp);
     ui_kbd_draw(&ui->kbd);
