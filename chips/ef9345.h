@@ -330,7 +330,7 @@ uint64_t ef9345_tick(ef9345_t* ef9345, uint64_t vdp_pins) {
 
 static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     mem_init(&ef9345->mem);
-    mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram); // TODO: add a UI visualisation of this RAM
+    mem_map_ram(&ef9345->mem, 0, 0x0000, 0x2000, ef9345->ram);
     _ef9345_recompute_configuration(ef9345);
 }
 
@@ -656,16 +656,20 @@ static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pin
     return vdp_pins;
 }
 
-static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t screen_row) {
+static uint8_t _ef9345_actual_row(ef9345_t* ef9345, uint8_t screen_row) {
     uint8_t actual_row;
     if (screen_row > 0) {
         actual_row = ef9345->origin_row_yor + screen_row - 1;
         while (actual_row > 31) { actual_row -= 24; }
     }
     else {
-        actual_row = 0; // TODO: in fact, the selected service row
+        actual_row = ef9345->indirect_tgs & 0b00100000 ? 1 : 0; // Selection of the service row
     }
+    return actual_row;
+}
 
+static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t screen_row) {
+    uint8_t actual_row = _ef9345_actual_row(ef9345, screen_row);
     const uint8_t block_origin = ef9345->block_origin;
 
     uint8_t latched_underline = 0;
@@ -720,14 +724,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t screen_row)
 }
 
 static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t screen_row) {
-    uint8_t actual_row;
-    if (screen_row > 0) {
-        actual_row = ef9345->origin_row_yor + screen_row - 1;
-        while (actual_row > 31) { actual_row -= 24; }
-    }
-    else {
-        actual_row = 0; // TODO: in fact, the selected service row
-    }
+    uint8_t actual_row = _ef9345_actual_row(ef9345, screen_row);
 
     for (uint8_t x = 0; x < 40; x++) {
         uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, ef9345->block_origin);
