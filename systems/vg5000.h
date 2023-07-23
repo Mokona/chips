@@ -76,6 +76,7 @@ typedef struct {
     chips_debug_t debug;
     uint8_t ram[8][0x4000]; // TODO: implement extended RAM
     uint8_t rom[0x4000];
+    bool nmi;
     bool valid;
 } vg5000_t;
 
@@ -316,6 +317,14 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
 
     sys->vdp_pins = vdp_pins;
 
+    // NMI
+    if (sys->nmi) {
+        cpu_pins |= Z80_NMI;
+    }
+    else {
+        cpu_pins &= ~Z80_NMI;
+    }
+
     return cpu_pins;
 }
 
@@ -337,22 +346,23 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds) {
         }
     }
     sys->cpu_pins = pins;
+    if (sys->nmi) {
+        sys->nmi = false;
+    }
     kbd_update(&sys->kbd, micro_seconds);
     return num_ticks;
 }
 
 void vg5000_key_down(vg5000_t* sys, int key_code) {
-    // if (key_code >= 32) {
-    //     printf("Key down char: %c\n", key_code);
-    // } else printf("Key down: %i\n", key_code);
     kbd_key_down(&sys->kbd, key_code);
 }
 
 void vg5000_key_up(vg5000_t* sys, int key_code) {
-    // if (key_code >= 32) {
-    //     printf("Key up char: %c\n", key_code);
-    // } else printf("Key up: %i\n", key_code);
     kbd_key_up(&sys->kbd, key_code);
+}
+
+void vg5000_triangle_key_pressed(vg5000_t* sys) {
+    sys->nmi = true;
 }
 
 bool vg5000_quickload(vg5000_t* sys, chips_range_t data) {
@@ -387,8 +397,8 @@ static void _vg5000_init_keyboard_matrix(vg5000_t* sys) {
         "A     Q "
         "Z:1BVCXW"
         ";26543ES"
-        "POIUGF*/" // * -> ×
-        "987, ]0 "
+        "POIUGF*/" // -> × and ÷ ?
+        "987,\\]0 " // \ maps ..
         "D <YTR+-"
         "MLKHJN =" // 8 lines
 
@@ -397,8 +407,8 @@ static void _vg5000_init_keyboard_matrix(vg5000_t* sys) {
         "a     q "
         "z*#bvcxw"
         "@!%$ \"es" // misses £
-        "poiugf*/" //  -> × and ÷ ?
-        "(/&  [) " // twice / ?
+        "poiugf|_" // 
+        "( &  [) "
         "d >ytr.?"
         "mlkhjn ^";
 
@@ -419,18 +429,19 @@ static void _vg5000_init_keyboard_matrix(vg5000_t* sys) {
     kbd_register_key(&sys->kbd, 0x08, 0, 3, 0); // Cursor Left
     kbd_register_key(&sys->kbd, 0x09, 0, 4, 0); // Cursor Right
     kbd_register_key(&sys->kbd, 0x0a, 0, 5, 0); // Cursor Down
+    kbd_register_key(&sys->kbd, 0x0f, 0, 6, 0); // CTRL
+    kbd_register_key(&sys->kbd, 0x06, 0, 7, 0); // INS (mapped on TAB)
     kbd_register_key(&sys->kbd, ' ' , 1, 2, 0); // ESP
+    kbd_register_key(&sys->kbd, 0x0e, 1, 3, 0); // CapsLock (mapped on Right Alt)
     kbd_register_key(&sys->kbd, 0x0d, 1, 5, 0); // RET
     kbd_register_key(&sys->kbd, 0x0b, 1, 6, 0); // Cursor Up
-    // kbd_register_key(&sys->kbd, 0x0F, 7, 0, 0); // INS
-    // kbd_register_key(&sys->kbd, 0x08, 6, 0, 0); // CTRL
-    // kbd_register_key(&sys->kbd, 0x0B, 2, 0, 0); // ???
+    kbd_register_key(&sys->kbd, 0x0c, 7, 1, 0); // EFF
+    kbd_register_key(&sys->kbd, 0x02, 0, 0, 1); // EFFE (mapped on HOME)
+    kbd_register_key(&sys->kbd, 0x07, 1, 0, 1); // STOP (mapped on ESC)
+    kbd_register_key(&sys->kbd, 0x01, 0, 6, 1); // Accent (mapped on Left Alt) -> doesn't work? // TODO: check why
+    
     // kbd_register_key(&sys->kbd, 0x09, 0, 0, 0); // LIST
-    // kbd_register_key(&sys->kbd, 0x0D, 3, 1, 0); // CAPS LOCK
     // kbd_register_key(&sys->kbd, 0x0E, 6, 6, 0); // PRT
-    // kbd_register_key(&sys->kbd, 0x0E, 7, 1, 0); // EFF
-    // TODO: Add the Triangle Key
-
 }
 
 
