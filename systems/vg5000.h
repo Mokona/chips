@@ -35,6 +35,8 @@ extern "C" {
 // bump this whenever the vg5000_t struct layout changes
 #define VG5000_SNAPSHOT_VERSION (0x0001)
 
+#define VG5000_MAX_AUDIO_SAMPLES (1024)
+#define VG5000_DEFAULT_AUDIO_SAMPLES (880)
 #define VG5000_FREQUENCY (4000000)
 #define VDP_TICKS_PER_CPU_TICK (EF9345_FREQUENCY / VG5000_FREQUENCY)
 
@@ -49,8 +51,7 @@ typedef enum {
 typedef struct {
     vg5000_type_t type;     // VG5000 model type
     chips_debug_t debug;    // optional debugger hook
-    // TODO: audio state
-    // ROM images
+    chips_audio_desc_t audio;
     struct {
         chips_range_t vg5000_10;
         chips_range_t vg5000_11;
@@ -63,12 +64,18 @@ typedef struct {
 typedef struct {
     z80_t cpu;
     ef9345_t vdp;
-    beeper_t beeper;
     vg5000_type_t type;
-    uint32_t tick_count;
-    uint8_t blink_counter;
     kbd_t kbd;
     mem_t mem;
+    struct {
+        chips_audio_callback_t callback;
+        float soundin;
+        int period;
+        int counter;
+        int num_samples;
+        int sample_pos;
+        float sample_buffer[VG5000_MAX_AUDIO_SAMPLES];
+    } audio;
     uint64_t cpu_pins;
     uint64_t vdp_pins;
     uint64_t service_bus;
@@ -120,6 +127,8 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 #define SERVICE_BUS_MASK_RK7 (1ULL << SERVICE_BUS_PIN_RK7)
 #define SERVICE_BUS_MASK_WK7 (1ULL << SERVICE_BUS_PIN_WK7)
 
+#define VG5000_AUDIO_FIXEDPOINT_SCALE (16)
+
 static void _vg5000_init_memory_map(vg5000_t* sys);
 static void _vg5000_init_keyboard_matrix(vg5000_t* sys);
 
@@ -133,11 +142,20 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     sys->freq_hz = VG5000_FREQUENCY;
     sys->debug = desc->debug;
 
+    // Graphics
     ef9345_init(&sys->vdp, &desc->roms.ef9345_charset);
 
     memcpy(sys->rom, desc->roms.vg5000_11.ptr, desc->roms.vg5000_11.size);
     _vg5000_init_memory_map(sys);
     _vg5000_init_keyboard_matrix(sys);
+
+    // Audio
+    sys->audio.callback = desc->audio.callback;
+    sys->audio.num_samples = (desc->audio.num_samples == 0)?VG5000_DEFAULT_AUDIO_SAMPLES:VG5000_MAX_AUDIO_SAMPLES;
+    sys->audio.period = (VG5000_FREQUENCY * VG5000_AUDIO_FIXEDPOINT_SCALE) /
+                        (desc->audio.sample_rate?desc->audio.sample_rate:44100);
+    sys->audio.counter = sys->audio.period;
+    CHIPS_ASSERT(sys->audio.num_samples <= VG5000_MAX_AUDIO_SAMPLES);
 }
 
 void vg5000_discard(vg5000_t* sys)
@@ -150,8 +168,10 @@ void vg5000_reset(vg5000_t* sys)
 {
     CHIPS_ASSERT(sys && sys->valid);
     sys->cpu_pins = z80_reset(&sys->cpu);
-    beeper_reset(&sys->beeper);
     ef9345_reset(&sys->vdp);
+    sys->audio.sample_pos = 0;
+    sys->audio.soundin = 0.f;
+    sys->audio.counter = sys->audio.period;
     _vg5000_init_memory_map(sys);
 }
 
@@ -256,8 +276,6 @@ void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64
 uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
     cpu_pins = z80_tick(&sys->cpu, cpu_pins);
 
-    // TODO: update beeper
-    
     if (cpu_pins & Z80_MREQ) {
         // TODO: check memory mapping depending on the configuration
         const uint16_t addr = Z80_GET_ADDR(cpu_pins);
@@ -304,6 +322,23 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
 
             uint16_t columns = kbd_test_lines(&sys->kbd, 1 << key_line);
             Z80_SET_DATA(cpu_pins, ~columns);
+        }
+    }
+
+    // Audio
+    if ((sys->service_bus & SERVICE_BUS_MASK_WK7) == 0) {
+        sys->audio.soundin = (Z80_GET_DATA(cpu_pins) & 0b1000) ? 0.5f : 0.f;
+    }
+    sys->audio.counter -= VG5000_AUDIO_FIXEDPOINT_SCALE;
+    if (sys->audio.counter <= 0) {
+        sys->audio.counter += sys->audio.period;
+
+        sys->audio.sample_buffer[sys->audio.sample_pos] = sys->audio.soundin;
+        sys->audio.sample_pos++;
+
+        if (sys->audio.sample_pos == sys->audio.num_samples) {
+            sys->audio.callback.func(sys->audio.sample_buffer, sys->audio.num_samples, NULL);
+            sys->audio.sample_pos = 0;
         }
     }
 
