@@ -257,8 +257,9 @@ typedef struct {
 /* set multiplexed data to ADM0-ADM7 pins */
 #define EF9345_SET_MUX_DATA(p, d) {((p) = ((p)&~EF9345_ADM0_ADM7_MASK)|(((d)&0xff)<<EF9345_PIN_ADM0));}
 
-/* Memory pointer macros */
-//
+/* decoding macros */
+#define EF9345_SELECTED_SERVICE_ON(ef9345) (ef9345->indirect_pat & 0b1)
+#define EF9345_SELECTED_SERVICE_ROW(ef9345) (ef9345->indirect_tgs & 0b00100000 ? 1 : 0)
 
 /* initialize a new ef9345 instance */
 void ef9345_init(ef9345_t *ef9345, chips_range_t* charset_range);
@@ -663,7 +664,7 @@ static uint8_t _ef9345_actual_row(ef9345_t* ef9345, uint8_t screen_row) {
         while (actual_row > 31) { actual_row -= 24; }
     }
     else {
-        actual_row = ef9345->indirect_tgs & 0b00100000 ? 1 : 0; // Selection of the service row
+        actual_row = EF9345_SELECTED_SERVICE_ROW(ef9345);
     }
     return actual_row;
 }
@@ -942,7 +943,7 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
                     if (ef9345->indirect_mat & 0b01000000) {
                         uint8_t cursor_x = ef9345->direct_r7 & 0x3f;
                         uint8_t cursor_y = ef9345->direct_r6 & 0x1f;
-                        display_cursor = (cursor_x == x && cursor_y == 0); // TODO: in fact, depends on the current selected service row
+                        display_cursor = (cursor_x == x && cursor_y == EF9345_SELECTED_SERVICE_ROW(ef9345));
                     }
                     _ef9345_render_8x10_alpha_char(ef9345, x, fb_address, display_cursor);
                 }
