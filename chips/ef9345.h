@@ -464,11 +464,11 @@ static void _ef9345_start_execute_command(ef9345_t* ef9345) {
 
                     if (is_read) {
                         ef9345->direct_r1 = mem_rd(&ef9345->mem, address);
-                        ef9345->direct_r2 = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
+                        ef9345->direct_r2 = mem_rd(&ef9345->mem, address + 0x0400); // TODO: incorrect in some situation. Implement correct Z block increment
                     }
                     else {
                         mem_wr(&ef9345->mem, address, ef9345->direct_r1);
-                        mem_wr(&ef9345->mem, address + 0x0400, ef9345->direct_r2); // TODO: verify if memory should wrap
+                        mem_wr(&ef9345->mem, address + 0x0400, ef9345->direct_r2); // TODO: incorrect in some situation. Implement correct Z block increment
                     }
                     // TODO: direct_r3 is used as a working register. It should be changed. But to what?
 
@@ -680,7 +680,7 @@ static void _ef9345_load_char_row_40_short(ef9345_t* ef9345, uint8_t screen_row)
     for (uint8_t x = 0; x < 40; x++) {
         const uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, block_origin);
         const uint8_t data_a_prime = mem_rd(&ef9345->mem, address);
-        const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
+        const uint8_t data_b_prime = mem_rd(&ef9345->mem, address + 0x0400); // TODO: incorrect in some situation. Implement correct Z block increment
 
         const bool is_del = (data_b_prime & 0b11100000) == 0b10000000; // TODO: should a_prime 8th bit also be a 1?
 
@@ -729,8 +729,8 @@ static void _ef9345_load_char_row_40_long(ef9345_t* ef9345, uint8_t screen_row) 
     for (uint8_t x = 0; x < 40; x++) {
         uint16_t address = _ef9345_triplet_to_physical_address(x, actual_row, ef9345->block_origin);
         uint8_t data_c = mem_rd(&ef9345->mem, address);
-        uint8_t data_b = mem_rd(&ef9345->mem, address + 0x0400); // TODO: verify if memory should wrap
-        uint8_t data_a = mem_rd(&ef9345->mem, address + 0x0800); // TODO: verify if memory should wrap
+        uint8_t data_b = mem_rd(&ef9345->mem, address + 0x0400); // TODO: incorrect in some situation. Implement correct Z block increment
+        uint8_t data_a = mem_rd(&ef9345->mem, address + 0x0800); // TODO: incorrect in some situation. Implement correct Z block increment
         ef9345->row_buffer[x].a = data_a;
         ef9345->row_buffer[x].b = data_b;
         ef9345->row_buffer[x].c = data_c;
