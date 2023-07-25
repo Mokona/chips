@@ -58,6 +58,7 @@ typedef struct {
         chips_range_t vg5000_11;
         chips_range_t ef9345_charset;
     } roms;
+    bool audible_tape;
 } vg5000_desc_t;
 
 
@@ -84,6 +85,7 @@ typedef struct {
         bool remote;        // calue of Remote control data
         bool data_value;    // value of latest Data
         bool previous_data_value;
+        bool audible_tape;
         uint16_t ticks_buf[VG5000_MAX_TAPE_SIZE];  // records the ticks
     } tape;
     uint64_t cpu_pins;
@@ -372,19 +374,13 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
             if (sys->tape.data_value != sys->tape.previous_data_value) {
                 sys->tape.previous_data_value = sys->tape.data_value;
 
-                static uint16_t previous_counter = 0;
-                if (previous_counter != sys->tape.tick_counter) {
-                    previous_counter = sys->tape.tick_counter;
-                }
-
-
                 if (sys->tape.pos < sys->tape.size) {
                     sys->tape.ticks_buf[sys->tape.pos] = sys->tape.tick_counter;
                     sys->tape.pos++;
                 }
                 sys->tape.tick_counter = 0;
 
-                sys->audio.soundin = sys->tape.data_value?0.5f:0.f; // TODO: make audio output optional
+                sys->audio.soundin = (sys->tape.audible_tape&&sys->tape.data_value)?0.5f:0.f;
             }
         }
 
@@ -393,17 +389,12 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
             if (sys->tape.pos < sys->tape.size) {
                 cpu_pins &= ~Z80_D7;
                 cpu_pins |= sys->tape.data_value?Z80_D7:0;
-                //Z80_SET_DATA(cpu_pins, sys->tape.data_value?0xff:0x00);
 
                 if (sys->tape.tick_counter >= sys->tape.ticks_buf[sys->tape.pos]) {
-                    static uint16_t previous_counter = 0;
-                    if (previous_counter != sys->tape.tick_counter) {
-                        previous_counter = sys->tape.tick_counter;
-                    }
                     sys->tape.tick_counter -= sys->tape.ticks_buf[sys->tape.pos];
                     sys->tape.pos++;
                     sys->tape.data_value = !sys->tape.data_value;
-                    sys->audio.soundin = sys->tape.data_value?0.5f:0.f; // TODO: make audio output optional
+                    sys->audio.soundin = (sys->tape.audible_tape&&sys->tape.data_value)?0.5f:0.f;
                 }
             }
         }
