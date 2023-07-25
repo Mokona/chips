@@ -117,6 +117,7 @@ static void _ui_vg5000_draw_menu(ui_vg5000_t* ui) {
             ImGui::MenuItem("Audio Output", 0, &ui->audio.open);
             ImGui::MenuItem("Z80 CPU", 0, &ui->cpu.open);
             ImGui::MenuItem("EF9345 VDP", 0, &ui->vdp.open);
+            ImGui::Checkbox("Audible Tape", &ui->vg5000->tape.audible_tape);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Debug")) {
