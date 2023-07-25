@@ -35,7 +35,8 @@ extern "C" {
 // bump this whenever the vg5000_t struct layout changes
 #define VG5000_SNAPSHOT_VERSION (0x0001)
 
-#define VG5000_MAX_TAPE_SIZE (1<<16)
+//#define VG5000_MAX_TAPE_SIZE (1<<16)
+#define VG5000_MAX_TAPE_SIZE (1500000) // TODO: replace by a callback to application to ask for tape content
 #define VG5000_MAX_AUDIO_SAMPLES (1024)
 #define VG5000_DEFAULT_AUDIO_SAMPLES (880)
 #define VG5000_FREQUENCY (4000000)
@@ -73,8 +74,6 @@ typedef struct {
     struct {
         chips_audio_callback_t callback;
         float soundin;
-        //int period;
-        //int counter;
         int num_samples;
         int sample_pos;
         float sample_buffer[VG5000_MAX_AUDIO_SAMPLES];
@@ -182,6 +181,7 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     });
 
     // Tape
+    sys->tape.audible_tape = desc->audible_tape;
     sys->tape.tick_counter = 0;
     sys->tape.previous_data_value = 0;
     sys->tape.size = 1<<16; // TODO: Implement a tape insertion
@@ -366,6 +366,7 @@ uint64_t _vg5000_audio_tape_tick(vg5000_t* sys, uint64_t cpu_pins) {
 
                 if (sys->tape.pos < sys->tape.size) {
                     sys->tape.ticks_buf[sys->tape.pos] = sys->tape.tick_counter;
+                    printf("Tick %d\n", sys->tape.tick_counter);
                     sys->tape.pos++;
                 }
                 sys->tape.tick_counter = 0;
