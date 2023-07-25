@@ -308,47 +308,26 @@ void _vg5000_7807_decoder(const uint64_t * cpu_pins, uint64_t * vdp_pins, uint64
     *service_bus = local_service_bus;
 }
 
-uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
-    cpu_pins = z80_tick(&sys->cpu, cpu_pins);
-
-    // 7814
-    // TODO: add external bus signal WAITE/
-    cpu_pins &= ~Z80_WAIT;
-    cpu_pins |= (cpu_pins & Z80_M1) >> Z80_PIN_M1 << Z80_PIN_WAIT;
-
-    if (cpu_pins & Z80_MREQ) {
-        // TODO: check memory mapping depending on the configuration
-        const uint16_t addr = Z80_GET_ADDR(cpu_pins);
-        if (cpu_pins & Z80_RD) {
-            Z80_SET_DATA(cpu_pins, mem_rd(&sys->mem, addr));
-        }
-        else if (cpu_pins & Z80_WR) {
-            // write to memory
-            mem_wr(&sys->mem, addr, Z80_GET_DATA(cpu_pins));
-        }
-    }
-
-    // TODO: implement 7806, which implement memory adressing in case of extension
-    
-    // Decode EF9347 and K7 control signals
-    uint64_t vdp_pins = sys->vdp.pins;
-    _vg5000_7807_decoder(&cpu_pins, &vdp_pins, &sys->service_bus);
-
+uint64_t _vg5000_ef9345_tick(vg5000_t *sys, uint64_t cpu_pins, uint64_t* vdp_pins) {
     // Connect Z80 data bus to EF9345 data interface
     uint8_t z80_data = Z80_GET_DATA(cpu_pins);
-    EF9345_SET_MUX_DATA_ADDR(vdp_pins, z80_data);
+    EF9345_SET_MUX_DATA_ADDR(*vdp_pins, z80_data);
 
     // This is a shortcut, as the VDP is updating in parallel to the CPU
     for (int vdp_update = 0; vdp_update < VDP_TICKS_PER_CPU_TICK; vdp_update++) {
-        vdp_pins = ef9345_tick(&sys->vdp, vdp_pins);
+        *vdp_pins = ef9345_tick(&sys->vdp, *vdp_pins);
     }
 
     // If read phase from the EF9345, apply the data to the Z80 data bus
-    uint8_t ds = (vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
+    uint8_t ds = (*vdp_pins & EF9345_MASK_DS) >> EF9345_PIN_DS;
     if (!ds) {
-        Z80_SET_DATA(cpu_pins, EF9345_GET_MUX_DATA_ADDR(vdp_pins));
+        Z80_SET_DATA(cpu_pins, EF9345_GET_MUX_DATA_ADDR(*vdp_pins));
     }
 
+    return cpu_pins;
+}
+
+uint64_t _vg5000_keyboard_tick(vg5000_t* sys, uint64_t cpu_pins) {
     // If RKY is low, the keyboard is selected
     uint8_t rky = (sys->service_bus & SERVICE_BUS_MASK_RKY) >> SERVICE_BUS_PIN_RKY;
     if (!rky) {
@@ -363,8 +342,10 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
             Z80_SET_DATA(cpu_pins, ~columns);
         }
     }
+    return cpu_pins;
+}
 
-    // Audio/Tape bus
+uint64_t _vg5000_audio_tape_tick(vg5000_t* sys, uint64_t cpu_pins) {
     const bool write_k7 = (sys->service_bus & SERVICE_BUS_MASK_WK7) == 0;
     const bool read_k7 = (sys->service_bus & SERVICE_BUS_MASK_RK7) == 0;
     if (write_k7) {
@@ -410,11 +391,11 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
     }
     else {
         if (!sys->tape.remote && sys->tape.pos > 0) {
+            // Automatic rewind for tape
+            // TODO: make this an option
             sys->tape.pos = 0;
             sys->tape.tick_counter = 0;
             sys->tape.data_value = 0;
-
-            printf("Tape rewinded\n");
         }
     }
 
@@ -431,6 +412,42 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
         }
     }
 
+    return cpu_pins;
+}
+
+uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
+    cpu_pins = z80_tick(&sys->cpu, cpu_pins);
+
+    // 7814
+    // TODO: add external bus signal WAITE/
+    cpu_pins &= ~Z80_WAIT;
+    cpu_pins |= (cpu_pins & Z80_M1) >> Z80_PIN_M1 << Z80_PIN_WAIT;
+
+    if (cpu_pins & Z80_MREQ) {
+        // TODO: check memory mapping depending on the configuration
+        const uint16_t addr = Z80_GET_ADDR(cpu_pins);
+        if (cpu_pins & Z80_RD) {
+            Z80_SET_DATA(cpu_pins, mem_rd(&sys->mem, addr));
+        }
+        else if (cpu_pins & Z80_WR) {
+            // write to memory
+            mem_wr(&sys->mem, addr, Z80_GET_DATA(cpu_pins));
+        }
+    }
+
+    // TODO: implement 7806, which implement memory adressing in case of extension
+    
+    // Decode EF9347 and K7 control signals
+    uint64_t vdp_pins = sys->vdp.pins;
+    _vg5000_7807_decoder(&cpu_pins, &vdp_pins, &sys->service_bus);
+
+    cpu_pins = _vg5000_ef9345_tick(sys, cpu_pins, &vdp_pins);
+
+    sys->vdp_pins = vdp_pins;
+
+    cpu_pins = _vg5000_keyboard_tick(sys, cpu_pins);    
+    cpu_pins = _vg5000_audio_tape_tick(sys, cpu_pins);
+
     // VSync causes an interrupt
     uint8_t vsync = (vdp_pins & EF9345_MASK_PC_VS) >> EF9345_PIN_PC_VS;
     if (!vsync) {
@@ -438,8 +455,6 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
     } else {
         cpu_pins &= ~Z80_INT;
     }
-
-    sys->vdp_pins = vdp_pins;
 
     // NMI
     if (sys->nmi) {
