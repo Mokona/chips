@@ -66,14 +66,15 @@ typedef struct {
 typedef struct {
     z80_t cpu;
     ef9345_t vdp;
+    beeper_t beeper;
     vg5000_type_t type;
     kbd_t kbd;
     mem_t mem;
     struct {
         chips_audio_callback_t callback;
         float soundin;
-        int period;
-        int counter;
+        //int period;
+        //int counter;
         int num_samples;
         int sample_pos;
         float sample_buffer[VG5000_MAX_AUDIO_SAMPLES];
@@ -145,6 +146,9 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 
 #define VG5000_AUDIO_FIXEDPOINT_SCALE (16)
 
+#define _VG5000_DEFAULT(val,def) (((val) != 0) ? (val) : (def))
+
+
 static void _vg5000_init_memory_map(vg5000_t* sys);
 static void _vg5000_init_keyboard_matrix(vg5000_t* sys);
 
@@ -167,11 +171,15 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
 
     // Audio
     sys->audio.callback = desc->audio.callback;
-    sys->audio.num_samples = (desc->audio.num_samples == 0)?VG5000_DEFAULT_AUDIO_SAMPLES:VG5000_MAX_AUDIO_SAMPLES;
-    sys->audio.period = (VG5000_FREQUENCY * VG5000_AUDIO_FIXEDPOINT_SCALE) /
-                        (desc->audio.sample_rate?desc->audio.sample_rate:44100);
-    sys->audio.counter = sys->audio.period;
+    sys->audio.num_samples = _VG5000_DEFAULT(desc->audio.num_samples == 0,VG5000_DEFAULT_AUDIO_SAMPLES);
     CHIPS_ASSERT(sys->audio.num_samples <= VG5000_MAX_AUDIO_SAMPLES);
+
+    const int audio_hz = _VG5000_DEFAULT(desc->audio.sample_rate, 44100);
+    beeper_init(&sys->beeper, &(beeper_desc_t){
+        .tick_hz = (int)sys->freq_hz,
+        .sound_hz = audio_hz,
+        .base_volume = 0.50f,
+    });
 
     // Tape
     sys->tape.tick_counter = 0;
@@ -193,7 +201,8 @@ void vg5000_reset(vg5000_t* sys)
     // Audio
     sys->audio.sample_pos = 0;
     sys->audio.soundin = 0.f;
-    sys->audio.counter = sys->audio.period;
+    beeper_reset(&sys->beeper);
+
     // Tape
     sys->tape.tick_counter = 0;
     sys->tape.previous_data_value = 0;
@@ -404,20 +413,20 @@ uint64_t _vg5000_tick(vg5000_t* sys, uint64_t cpu_pins) {
             sys->tape.pos = 0;
             sys->tape.tick_counter = 0;
             sys->tape.data_value = 0;
+
             printf("Tape rewinded\n");
         }
     }
 
     // Audio
-    sys->audio.counter -= VG5000_AUDIO_FIXEDPOINT_SCALE;
-    if (sys->audio.counter <= 0) {
-        sys->audio.counter += sys->audio.period;
-
-        sys->audio.sample_buffer[sys->audio.sample_pos] = sys->audio.soundin;
-        sys->audio.sample_pos++;
-
+    beeper_set(&sys->beeper, sys->audio.soundin);
+    if (beeper_tick(&sys->beeper)) {
+        // new audio sample ready
+        sys->audio.sample_buffer[sys->audio.sample_pos++] = sys->beeper.sample;
         if (sys->audio.sample_pos == sys->audio.num_samples) {
-            sys->audio.callback.func(sys->audio.sample_buffer, sys->audio.num_samples, NULL);
+            if (sys->audio.callback.func) {
+                sys->audio.callback.func(sys->audio.sample_buffer, sys->audio.num_samples, sys->audio.callback.user_data);
+            }
             sys->audio.sample_pos = 0;
         }
     }
