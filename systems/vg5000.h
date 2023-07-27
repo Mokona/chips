@@ -210,19 +210,7 @@ void vg5000_reset(vg5000_t* sys)
     _vg5000_init_memory_map(sys);
 }
 
-chips_display_info_t vg5000_display_info(vg5000_t* sys)
-{
-    static const uint32_t palette[8] = {
-        0xFF000000,     // black
-        0xFF0000FF,     // red
-        0xFF00FF00,     // green
-        0xFF00FFFF,     // yellow
-        0xFFFF0000,     // blue
-        0xFFFF00FF,     // magenta
-        0xFFFFFF00,     // cyan
-        0xFFFFFFFF,     // white
-    };
-
+chips_display_info_t vg5000_display_info(vg5000_t* sys) {
     const chips_display_info_t res = {
         .frame = {
             .dim = {
@@ -242,8 +230,8 @@ chips_display_info_t vg5000_display_info(vg5000_t* sys)
             .height = sys?sys->vdp.fb_height:250,
         },
         .palette = {
-            .ptr = sys?(void*)palette:0,  // TODO: get from EF9345 ?
-            .size = sys?sizeof(palette):0 // TODO: get from EF9345
+            .ptr = sys?(void*)(sys->vdp.palette):0,
+            .size = sys?sys->vdp.palette_size:0
         }
     };
 
