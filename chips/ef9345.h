@@ -228,6 +228,8 @@ typedef struct {
     uint8_t latest_loaded_row_line;
     uint8_t latest_rendered_column;
 
+    uint32_t * palette;
+    size_t palette_size;
     uint16_t fb_width;
     uint16_t fb_height;
     uint32_t fb_size;
@@ -287,12 +289,24 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
 static void _ef9345_recompute_configuration(ef9345_t* ef9345);
 
 void ef9345_init(ef9345_t* ef9345, chips_range_t* charset_range) {
+    static uint32_t palette[8] = {
+        0xFF000000,     // black
+        0xFF0000FF,     // red
+        0xFF00FF00,     // green
+        0xFF00FFFF,     // yellow
+        0xFFFF0000,     // blue
+        0xFFFF00FF,     // magenta
+        0xFFFFFF00,     // cyan
+        0xFFFFFFFF,     // white
+    };
     CHIPS_ASSERT(ef9345);
     memset(ef9345, 0, sizeof(*ef9345));
 
     ef9345->fb_width = EF9345_FRAMEBUFFER_WIDTH;
     ef9345->fb_height = EF9345_FRAMEBUFFER_HEIGHT;
     ef9345->fb_size = EF9345_FRAMEBUFFER_SIZE;
+    ef9345->palette = palette;
+    ef9345->palette_size = sizeof(palette);
 
     _ef9345_init_memory_map(ef9345);
 
