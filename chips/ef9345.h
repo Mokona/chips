@@ -217,6 +217,14 @@ typedef struct {
     uint16_t line_tick;
     uint16_t current_line;
 
+    uint16_t last_scan_line;
+    uint16_t active_scan_lines;
+    uint16_t first_active_line;
+
+    uint8_t latest_loaded_row_line;
+    uint8_t latest_rendered_column;
+
+    //
     bool interlaced; // TODO: check bool packing in this structure
     uint16_t lines_per_frame;
     ef9345_char_code_t char_code;
@@ -225,9 +233,7 @@ typedef struct {
     ef945_char_triplet_t row_buffer[40];
     uint8_t quadrant_buffer[40]; // used for Double Height and Double Width attribute
 
-    uint8_t latest_loaded_row_line;
-    uint8_t latest_rendered_column;
-
+    // Display information
     uint32_t * palette;
     size_t palette_size;
     uint16_t fb_width;
@@ -460,6 +466,10 @@ static void _ef9345_recompute_configuration(ef9345_t* ef9345) {
     ef9345->char_code = ((ef9345->indirect_tgs >> 6) & 0x03) | ((ef9345->indirect_pat >> 5) & 0x04);
     ef9345->block_origin = (ef9345->indirect_ror & 0b11100000) >> 4; // Implicit b0 at 0 (blocks are always even)
     ef9345->origin_row_yor = (ef9345->indirect_ror & 0b11111);
+
+    ef9345->last_scan_line = ef9345->lines_per_frame;
+    ef9345->active_scan_lines = 250;
+    ef9345->first_active_line = ef9345->last_scan_line - ef9345->active_scan_lines;
 }
 
 static void _ef9345_start_execute_command(ef9345_t* ef9345) {
@@ -847,11 +857,7 @@ static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t
     const uint8_t bg_color = colors_from_buffer & 0b111;
     const uint8_t fg_color = (colors_from_buffer & 0b1110000) >> 4;
 
-    // TODO: precompute this copy/pasted block
-    const uint16_t last_scan_line = ef9345->lines_per_frame;
-    const uint16_t active_scan_lines = 250;
-    const uint16_t first_active_line = last_scan_line - active_scan_lines;
-    const uint16_t row_line = (ef9345->current_line - first_active_line) % 10;
+    const uint16_t row_line = (ef9345->current_line - ef9345->first_active_line) % 10;
 
     if (char_from_buffer == 0x00) {
         // TODO: implement attributes for DEL
@@ -898,12 +904,10 @@ static void _ef9345_render_8x10_alpha_char(ef9345_t* ef9345, uint8_t x, uint32_t
 }
 
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
-    const uint16_t last_scan_line = ef9345->lines_per_frame;
-
     ef9345->line_tick = (ef9345->line_tick + 1) % tick_per_line;
 
     if (ef9345->line_tick == 0) {
-        ef9345->current_line = (ef9345->current_line + 1) % last_scan_line;
+        ef9345->current_line = (ef9345->current_line + 1) % ef9345->last_scan_line;
     }
 
     // Sets VBLANK for the two first lines
@@ -920,10 +924,8 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
         vdp_pins |= EF9345_MASK_HVS_HS;
     }
 
-    const uint16_t active_scan_lines = 250;
-    const uint16_t first_active_line = last_scan_line - active_scan_lines;
     const uint16_t next_line = ef9345->current_line;
-    const int16_t  current_row = (next_line - first_active_line) / 10; // Warning, 0 is the service row
+    const int16_t  current_row = (next_line - ef9345->first_active_line) / 10; // Warning, 0 is the service row
 
     // Loads the next character row in intermediary buffer during the start of a row
     // TODO: be closer to actual loading timings.
@@ -942,7 +944,7 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
     }
 
     // TODO: RGB output at 8Mhz for 40c/row, 12Mhz for 80Mhz for c/row
-    if (ef9345->current_line >= first_active_line && ef9345->current_line < last_scan_line) {
+    if (ef9345->current_line >= ef9345->first_active_line && ef9345->current_line < ef9345->last_scan_line) {
         // Active lines
         if (ef9345->line_tick < 40*tick_for_1mus) {
             // Active display time
@@ -951,7 +953,7 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins) {
             if (x != ef9345->latest_rendered_column) {
                 ef9345->latest_rendered_column = x;
 
-                uint32_t fb_address = ((ef9345->current_line - first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
+                uint32_t fb_address = ((ef9345->current_line - ef9345->first_active_line) * EF9345_FRAMEBUFFER_WIDTH) + (x * 8);
                 if (current_row == 0) {
                     bool display_cursor = false;
                     if (ef9345->indirect_mat & 0b01000000) {
