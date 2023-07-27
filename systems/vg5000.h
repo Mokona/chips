@@ -184,7 +184,7 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     sys->tape.audible_tape = desc->audible_tape;
     sys->tape.tick_counter = 0;
     sys->tape.previous_data_value = 0;
-    sys->tape.size = 1<<16; // TODO: Implement a tape insertion
+    sys->tape.size = 1<<16; // There's always a tape available. Even if not inserted. It's just blank (and small)
 }
 
 void vg5000_discard(vg5000_t* sys)
@@ -366,7 +366,6 @@ uint64_t _vg5000_audio_tape_tick(vg5000_t* sys, uint64_t cpu_pins) {
 
                 if (sys->tape.pos < sys->tape.size) {
                     sys->tape.ticks_buf[sys->tape.pos] = sys->tape.tick_counter;
-                    printf("Tick %d\n", sys->tape.tick_counter);
                     sys->tape.pos++;
                 }
                 sys->tape.tick_counter = 0;
