@@ -295,6 +295,8 @@ static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
 static void _ef9345_recompute_configuration(ef9345_t* ef9345);
 
 void ef9345_init(ef9345_t* ef9345, chips_range_t* charset_range) {
+    CHIPS_ASSERT(charset_range);
+
     static uint32_t palette[8] = {
         0xFF000000,     // black
         0xFF0000FF,     // red
@@ -315,15 +317,14 @@ void ef9345_init(ef9345_t* ef9345, chips_range_t* charset_range) {
     ef9345->palette_size = sizeof(palette);
 
     _ef9345_init_memory_map(ef9345);
-
-    if (charset_range) {
-        _ef9345_init_charset_memory_map(ef9345, charset_range);
-    }
+    _ef9345_init_charset_memory_map(ef9345, charset_range);
 }
 
 void ef9345_reset(ef9345_t* ef9345) {
     CHIPS_ASSERT(ef9345);
-    ef9345_init(ef9345, NULL);
+    memset(ef9345->direct_regs, 0, sizeof(ef9345->direct_regs));
+    memset(ef9345->indirect_regs, 0, sizeof(ef9345->indirect_regs));
+    _ef9345_recompute_configuration(ef9345);
 }
 
 // The horizontal line takes 64µs to display
