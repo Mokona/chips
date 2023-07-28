@@ -270,7 +270,7 @@ typedef struct {
 #define EF9345_SELECTED_SERVICE_ROW(ef9345) (ef9345->indirect_tgs & 0b00100000 ? 1 : 0)
 
 /* initialize a new ef9345 instance */
-void ef9345_init(ef9345_t *ef9345, chips_range_t* charset_range);
+void ef9345_init(ef9345_t *ef9345, const chips_range_t* charset_range);
 /* reset an existing ef9345 instance */
 void ef9345_reset(ef9345_t *ef9345);
 /* tick the ef9345 instance, returns the pins of the simulated ef9345 */
@@ -283,18 +283,19 @@ uint64_t ef9345_tick(ef9345_t *ef9345, uint64_t vdp_pins);
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
 #include <string.h>
+#include <stdio.h> // TODO: remove when not using printf anymore
 #ifndef CHIPS_ASSERT
     #include <assert.h>
     #define CHIPS_ASSERT(c) assert(c)
 #endif
 
 static void _ef9345_init_memory_map(ef9345_t* ef9345);
-static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, chips_range_t* charset_range);
+static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, const chips_range_t* charset_range);
 static uint64_t _ef9345_external_bus_transfer(ef9345_t* ef9345, uint64_t vdp_pins);
 static uint64_t _ef9345_beam_update(ef9345_t* ef9345, uint64_t vdp_pins);
 static void _ef9345_recompute_configuration(ef9345_t* ef9345);
 
-void ef9345_init(ef9345_t* ef9345, chips_range_t* charset_range) {
+void ef9345_init(ef9345_t* ef9345, const chips_range_t* charset_range) {
     CHIPS_ASSERT(charset_range);
 
     static uint32_t palette[8] = {
@@ -356,7 +357,7 @@ static void _ef9345_init_memory_map(ef9345_t* ef9345) {
     _ef9345_recompute_configuration(ef9345);
 }
 
-static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, chips_range_t* charset_range) {
+static void _ef9345_init_charset_memory_map(ef9345_t* ef9345, const chips_range_t* charset_range) {
     memcpy(ef9345->rom, charset_range->ptr, charset_range->size);
 
     mem_init(&ef9345->charset_mem);

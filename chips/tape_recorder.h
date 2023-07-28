@@ -143,7 +143,7 @@ bool _read_tape_information(tape_recorder_t* recorder) {
         }
     }
 
-    if (tape_data_size < 32 + tape_info->data_length + 10) {
+    if (tape_data_size < (size_t)(32 + tape_info->data_length + 10)) {
         printf("Tape: wrong total data length\n");
         return false; // TODO: explain the reason of the failure
     }
