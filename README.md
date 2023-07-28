@@ -1,4 +1,12 @@
-# chips
+# chips (VG5000µ branch)
+
+## This branch
+
+[![Build Status](https://github.com/mokona/chips/workflows/build_and_test/badge.svg&branch=vg5000)](https://github.com/mokona/chips/actions)
+
+This branch is dedicated to emulation of the [VG5000µ computer](https://fr.wikipedia.org/wiki/Philips_VG5000%C2%B5).
+
+## Original README.md
 
 [![Build Status](https://github.com/floooh/chips/workflows/build_and_test/badge.svg)](https://github.com/floooh/chips/actions)
 
