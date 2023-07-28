@@ -88,6 +88,7 @@ typedef struct {
         bool audible_tape;
         uint16_t ticks_buf[VG5000_MAX_TAPE_SIZE];  // records the ticks
     } tape;
+    tape_recorder_t tape_recorder;
     uint64_t cpu_pins;
     uint64_t vdp_pins;
     uint64_t service_bus;
@@ -114,7 +115,7 @@ void vg5000_key_down(vg5000_t* sys, int key_code);
 // send a key-up event
 void vg5000_key_up(vg5000_t* sys, int key_code);
 // insert a tape for loading/saving (must be an VG5000µ .K7 file)
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data);
+bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data, chips_range_t k7_file_data);
 // remove tape
 void vg5000_remove_tape(vg5000_t* sys);
 // load a VG5000µ file into the emulator
@@ -130,7 +131,7 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
-
+#include <stdio.h> // TODO: remove when not using printf anymore
 #ifndef CHIPS_ASSERT
     #include <assert.h>
     #define CHIPS_ASSERT(c) assert(c)
@@ -185,6 +186,8 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     sys->tape.tick_counter = 0;
     sys->tape.previous_data_value = 0;
     sys->tape.size = 1<<16; // There's always a tape available. Even if not inserted. It's just blank (and small)
+
+    tape_recorder_init(&sys->tape_recorder);
 }
 
 void vg5000_discard(vg5000_t* sys)
@@ -492,17 +495,22 @@ void vg5000_triangle_key_pressed(vg5000_t* sys) {
     sys->nmi = true;
 }
 
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data) {
+bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data, chips_range_t k7_file_data) {
     CHIPS_ASSERT(sys && sys->valid);
+
     if (data.size > VG5000_MAX_TAPE_SIZE) {
         return false;
     }
+
     memcpy(sys->tape.ticks_buf, data.ptr, data.size);
     sys->tape.size = data.size;
     sys->tape.pos = 0;
     sys->tape.tick_counter = 0;
     sys->tape.data_value = 0;
-    return true;
+
+    tape_recorder_eject_tape(&sys->tape_recorder);
+
+    return tape_recorder_insert_tape(&sys->tape_recorder, k7_file_data);
 }
 
 void vg5000_remove_tape(vg5000_t* sys) {
