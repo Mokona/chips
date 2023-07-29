@@ -159,6 +159,43 @@ uint8_t _wait_for_synchro(tape_codec_t* tape_codec, bool* synchro_found) {
     return samples_consumed;
 }
 
+uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
+    uint8_t samples_consumed = 0;
+    *byte_found = false;
+
+    const uint16_t* ticks_buf = tape_codec->ticks_buf;
+    if (tape_codec->bit_count < 8) {
+        if (tape_codec->pos == 2 &&
+                _is_long_tick(ticks_buf[0]) &&
+                _is_long_tick(ticks_buf[1])) {
+            tape_codec->current_byte >>= 1;
+            tape_codec->bit_count++;
+            samples_consumed = 2;
+        }
+        else if (tape_codec->pos == 4 &&
+                _is_short_tick(ticks_buf[0]) &&
+                _is_short_tick(ticks_buf[1]) &&
+                _is_short_tick(ticks_buf[2]) &&
+                _is_short_tick(ticks_buf[3])) {
+            tape_codec->current_byte >>= 1;
+            tape_codec->current_byte |= 0x80;
+            tape_codec->bit_count++;
+            samples_consumed = 4;
+        }
+        else if (tape_codec->pos >= 4) {
+            printf("Tape: wrong data.\n");
+            samples_consumed = 4;
+            tape_codec->state = TAPE_ERROR;
+            tape_codec->bit_count = 8; // Use for logging after error
+        }
+    }
+    else {
+        samples_consumed = _wait_for_synchro(tape_codec, byte_found);
+    }
+
+    return samples_consumed;
+}
+
 uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uint64_t cpu_pins) {
     const bool write_k7 = (service_bus & SERVICE_BUS_MASK_WK7) == 0;
     const bool read_k7 = (service_bus & SERVICE_BUS_MASK_RK7) == 0;
@@ -196,53 +233,55 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                         samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
                         if (synchro_found) {
                             tape_codec->state = TAPE_HEADER_DATA;
+                            printf("Tape: initial synchro found\n");
                         }
                         break;
                     }
                     case TAPE_HEADER_DATA: {
-                            if (tape_codec->bit_count < 8) {
-                                if (tape_codec->pos == 2 &&
-                                        _is_long_tick(ticks_buf[0]) &&
-                                        _is_long_tick(ticks_buf[1])) {
-                                    tape_codec->current_byte >>= 1;
-                                    tape_codec->bit_count++;
-                                    samples_consumed = 2;
-                                }
-                                else if (tape_codec->pos == 4 &&
-                                        _is_short_tick(ticks_buf[0]) &&
-                                        _is_short_tick(ticks_buf[1]) &&
-                                        _is_short_tick(ticks_buf[2]) &&
-                                        _is_short_tick(ticks_buf[3])) {
-                                    tape_codec->current_byte >>= 1;
-                                    tape_codec->current_byte |= 0x80;
-                                    tape_codec->bit_count++;
-                                    samples_consumed = 4;
-                                }
-                                else if (tape_codec->pos >= 4) {
-                                    printf("Tape: wrong header data.\n");
-                                    samples_consumed = 4;
-                                    tape_codec->state = TAPE_ERROR;
-                                    tape_codec->bit_count = 8; // Use for logging after error
-                                }
+                        bool byte_found = false;
+                        samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
+                        if (byte_found) {
+
+                            if (recorder->tape_index < recorder->tape.size) {
+                                recorder->tape.data[recorder->tape_index] = tape_codec->valid_byte;
+                                printf("%02x ", tape_codec->valid_byte);
+                                recorder->tape_index++;
                             }
                             else {
-                                bool synchro_found = false;
-                                samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+                                printf("Tape: data too long\n");
+                                tape_codec->state = TAPE_ERROR;
+                            }
 
-                                if (synchro_found) {
-                                    printf("Byte found: %02x %08b\n", tape_codec->valid_byte, tape_codec->valid_byte);
-                                }
+                            tape_codec->state = recorder->tape_index == 32?TAPE_SECOND_SYNCHRO:TAPE_HEADER_DATA;
+                        }
+                        break;
+                    }
+                    case TAPE_SECOND_SYNCHRO: {
+                        bool synchro_found = false;
+                        samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+                        if (synchro_found) {
+                            tape_codec->state = TAPE_PAYLOAD_DATA;
+                            printf("\nTape: second synchro found\n");
+                        }
+                        break;
+                    }
+                    case TAPE_PAYLOAD_DATA: {
+                        bool byte_found = false;
+                        samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
+                        if (byte_found) {
+
+                            if (recorder->tape_index < recorder->tape.size) {
+                                recorder->tape.data[recorder->tape_index] = tape_codec->valid_byte;
+                                printf("%02x ", tape_codec->valid_byte);
+                                recorder->tape_index++;
+                            }
+                            else {
+                                printf("Tape: data too long\n");
+                                tape_codec->state = TAPE_ERROR;
                             }
                         }
                         break;
-                    case TAPE_SECOND_SYNCHRO: {
-                            tape_codec->state = TAPE_PAYLOAD_DATA;
-                        }
-                        break;
-                    case TAPE_PAYLOAD_DATA: {
-                            tape_codec->state = TAPE_INITIAL_SYNCHRO;
-                        }
-                        break;
+                    }
                     case TAPE_ERROR: {
                         if (tape_codec->bit_count > 0) {
                             printf("Tape: %d (@ %i)\n", ticks_buf[0], tape_codec->pos);
@@ -252,6 +291,7 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                         else {
                             tape_codec->state = TAPE_FINISHED;
                         }
+                        break;
                     }
                     default:
                         break;
@@ -284,13 +324,15 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
         }
     }
     else {
-        // if (!recorder->motor_on && recorder->tape_index > 0) {
-        //     // Automatic rewind for tape
-        //     // TODO: make this an option
-        //     sys->tape.pos = 0;
-        //     sys->tape.tick_counter = 0;
-        //     sys->tape.data_value = 0;
-        // }
+        if (!recorder->motor_on && recorder->tape_index > 0) {
+            // Automatic rewind for tape
+            // TODO: make this an option.
+            // TODO: validate the data on tape.
+            printf("\n");
+            printf("Tape: automatic rewind\n");
+            memset(&recorder->tape_codec, 0, sizeof(recorder->tape_codec));
+            recorder->tape_index = 0;
+        }
     }
 
     return cpu_pins;
