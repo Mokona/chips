@@ -81,7 +81,6 @@ typedef struct {
     tape_state_t state;
     uint8_t current_byte;
     uint8_t bit_count;
-    uint8_t valid_byte;
     uint16_t ticks_buf[VG5000_MAX_CODEC_SIZE];
 } tape_codec_t;
 
@@ -133,6 +132,16 @@ bool _is_short_tick(uint16_t tick) {
     return (tick > 600) && (tick < 1000); // TODO: real calibration to allow various bauds speeds
 }
 
+uint8_t _calibrate(tape_codec_t* tape_codec, bool* synchro_found) {
+    tape_codec->current_byte--;
+    if (tape_codec->current_byte == 0) {
+        // Loops 256 times      
+        *synchro_found = true;  
+        tape_codec->bit_count = 8;
+    }
+    return 1;
+}
+
 uint8_t _wait_for_synchro(tape_codec_t* tape_codec, bool* synchro_found) {
     uint8_t samples_consumed = 0;
     *synchro_found = false;
@@ -140,7 +149,6 @@ uint8_t _wait_for_synchro(tape_codec_t* tape_codec, bool* synchro_found) {
     const uint16_t* ticks_buf = tape_codec->ticks_buf;
     if (tape_codec->pos == 2 && _is_long_tick(ticks_buf[0]) && _is_long_tick(ticks_buf[1])) {
         *synchro_found = true;
-        tape_codec->valid_byte = tape_codec->current_byte;
         tape_codec->current_byte = 0;
         tape_codec->bit_count = 0;
         samples_consumed = 2;
@@ -171,6 +179,8 @@ uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
             tape_codec->current_byte >>= 1;
             tape_codec->bit_count++;
             samples_consumed = 2;
+
+            *byte_found = (tape_codec->bit_count == 8);
         }
         else if (tape_codec->pos == 4 &&
                 _is_short_tick(ticks_buf[0]) &&
@@ -181,6 +191,8 @@ uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
             tape_codec->current_byte |= 0x80;
             tape_codec->bit_count++;
             samples_consumed = 4;
+
+            *byte_found = (tape_codec->bit_count == 8);
         }
         else if (tape_codec->pos >= 4) {
             printf("Tape: wrong data.\n");
@@ -190,7 +202,13 @@ uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
         }
     }
     else {
-        samples_consumed = _wait_for_synchro(tape_codec, byte_found);
+        bool synchro_found = false;
+        samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+
+        if (synchro_found) {
+            tape_codec->current_byte = 0;
+            tape_codec->bit_count = 0;
+        }
     }
 
     return samples_consumed;
@@ -230,10 +248,11 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                 switch (tape_codec->state) {
                     case TAPE_INITIAL_SYNCHRO: {
                         bool synchro_found = false;
-                        samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+                        // samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+                        samples_consumed = _calibrate(tape_codec, &synchro_found);
                         if (synchro_found) {
                             tape_codec->state = TAPE_HEADER_DATA;
-                            printf("Tape: initial synchro found\n");
+                            printf("Tape: initial calibration done\n");
                         }
                         break;
                     }
@@ -241,10 +260,8 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                         bool byte_found = false;
                         samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
                         if (byte_found) {
-
                             if (recorder->tape_index < recorder->tape.size) {
-                                recorder->tape.data[recorder->tape_index] = tape_codec->valid_byte;
-                                printf("%02x ", tape_codec->valid_byte);
+                                recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
                                 recorder->tape_index++;
                             }
                             else {
@@ -258,10 +275,10 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                     }
                     case TAPE_SECOND_SYNCHRO: {
                         bool synchro_found = false;
-                        samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
+                        samples_consumed = _calibrate(tape_codec, &synchro_found);
+
                         if (synchro_found) {
                             tape_codec->state = TAPE_PAYLOAD_DATA;
-                            printf("\nTape: second synchro found\n");
                         }
                         break;
                     }
@@ -271,8 +288,7 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                         if (byte_found) {
 
                             if (recorder->tape_index < recorder->tape.size) {
-                                recorder->tape.data[recorder->tape_index] = tape_codec->valid_byte;
-                                printf("%02x ", tape_codec->valid_byte);
+                                recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
                                 recorder->tape_index++;
                             }
                             else {
@@ -298,7 +314,7 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
                 }
 
                 if (samples_consumed > 0) {
-                    memmove(&ticks_buf[0], &ticks_buf[samples_consumed], (VG5000_MAX_CODEC_SIZE - samples_consumed) * sizeof(uint16_t));
+                    memmove(tape_codec->ticks_buf, tape_codec->ticks_buf + samples_consumed, (VG5000_MAX_CODEC_SIZE - samples_consumed) * sizeof(uint16_t));
                     tape_codec->pos -= samples_consumed;
                 }
 
@@ -332,6 +348,8 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
             printf("Tape: automatic rewind\n");
             memset(&recorder->tape_codec, 0, sizeof(recorder->tape_codec));
             recorder->tape_index = 0;
+
+            tape_recorder_insert_tape(recorder, (chips_range_t){.ptr = recorder->tape.data, .size = recorder->tape.size});
         }
     }
 
