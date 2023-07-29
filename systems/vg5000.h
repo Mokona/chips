@@ -137,13 +137,6 @@ bool vg5000_load_snapshot(vg5000_t* sys, uint32_t version, vg5000_t* src);
     #define CHIPS_ASSERT(c) assert(c)
 #endif
 
-#define SERVICE_BUS_PIN_RKY 0
-#define SERVICE_BUS_PIN_RK7 1
-#define SERVICE_BUS_PIN_WK7 2
-#define SERVICE_BUS_MASK_RKY (1ULL << SERVICE_BUS_PIN_RKY)
-#define SERVICE_BUS_MASK_RK7 (1ULL << SERVICE_BUS_PIN_RK7)
-#define SERVICE_BUS_MASK_WK7 (1ULL << SERVICE_BUS_PIN_WK7)
-
 #define VG5000_AUDIO_FIXEDPOINT_SCALE (16)
 
 #define _VG5000_DEFAULT(val,def) (((val) != 0) ? (val) : (def))
@@ -383,12 +376,16 @@ uint64_t _vg5000_audio_tape_tick(vg5000_t* sys, uint64_t cpu_pins) {
     else {
         if (!sys->tape.remote && sys->tape.pos > 0) {
             // Automatic rewind for tape
-            // TODO: make this an option
+            // TODO: make this an option -> and maybe when the tape is toward the end to allow multiple consecutive loads
             sys->tape.pos = 0;
             sys->tape.tick_counter = 0;
             sys->tape.data_value = 0;
         }
     }
+
+    cpu_pins = tape_recorder_tick(&sys->tape_recorder, sys->service_bus, cpu_pins);
+    // sys->audio.soundin = (sys->tape.audible_tape&&sys->tape_recorder.data_value)?0.5f:0.f; // TODO: activate when new system in place
+
 
     // Audio
     beeper_set(&sys->beeper, sys->audio.soundin);
