@@ -76,14 +76,32 @@ typedef enum {
     TAPE_ERROR
 } tape_state_t;
 
+typedef enum {
+    TAPE_ERROR_CODEC_NONE,
+    TAPE_ERROR_CODEC_INVALID_SYNCHRO,
+    TAPE_ERROR_CODEC_INVALID_DATA,
+    TAPE_ERROR_CODEC_HEADER_TOO_SHORT,
+    TAPE_ERROR_CODEC_DATA_TOO_LONG,
+} tape_code_error_t;
+
 typedef struct {
     tape_state_t state;
     uint64_t calibrate;
     size_t pos;
     uint16_t ticks_buf[VG5000_MAX_CODEC_SIZE];
+    tape_code_error_t error;
     uint8_t current_byte;
     uint8_t bit_count;
 } tape_codec_t;
+
+typedef enum {
+    TAPE_ERROR_NONE,
+    TAPE_ERROR_CODEC_ERROR,
+    TAPE_ERROR_INVALID_HEADER,
+    TAPE_ERROR_INVALID_HEADER_PREFIX,
+    TAPE_ERROR_INVALID_DATA_PREFIX,
+    TAPE_ERROR_INVALID_DATA_SIZE,
+} tape_recorder_error_t;
 
 // a tape recorder description
 typedef struct {
@@ -96,6 +114,8 @@ typedef struct {
     uint16_t tick_counter;   // count of ticks since the latest value change
     uint8_t data_value;
     uint8_t previous_data_value;
+
+    tape_recorder_error_t error;
 
     bool motor_on;
 } tape_recorder_t;
@@ -114,7 +134,6 @@ void tape_recorder_eject_tape(tape_recorder_t* recorder);
 /*--- IMPLEMENTATION ---------------------------------------------------------*/
 #ifdef CHIPS_IMPL
 #include <string.h>
-#include <stdio.h> // TODO: remove when not using printf anymore
 #ifndef CHIPS_ASSERT
     #include <assert.h>
     #define CHIPS_ASSERT(c) assert(c)
@@ -126,14 +145,14 @@ void tape_recorder_init(tape_recorder_t* recorder) {
 }
 
 bool _is_long_tick(uint16_t tick, uint64_t calibration) {
-    const low = (calibration * 2) * 3 / 4;
-    const high = (calibration * 2) * 5 / 4;
+    const uint64_t low = (calibration * 2) * 3 / 4;
+    const uint64_t high = (calibration * 2) * 5 / 4;
     return (tick > low) && (tick < high);
 }
 
 bool _is_short_tick(uint16_t tick, uint64_t calibration) {
-    const low = (calibration) * 3 / 4;
-    const high = (calibration) * 5 / 4;
+    const uint64_t low = (calibration) * 3 / 4;
+    const uint64_t high = (calibration) * 5 / 4;
     return (tick > low) && (tick < high);
 }
 
@@ -180,6 +199,7 @@ uint8_t _wait_for_synchro(tape_codec_t* tape_codec, bool* synchro_found) {
     else {
         samples_consumed = 1;
         tape_codec->state = TAPE_ERROR;
+        tape_codec->error = TAPE_ERROR_CODEC_INVALID_SYNCHRO;
     }
 
     return samples_consumed;
@@ -215,9 +235,9 @@ uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
             *byte_found = (tape_codec->bit_count == 8);
         }
         else if (tape_codec->pos >= 4) {
-            printf("Tape: wrong data.\n");
             samples_consumed = 4;
             tape_codec->state = TAPE_ERROR;
+            tape_codec->error = TAPE_ERROR_CODEC_INVALID_DATA;
             tape_codec->bit_count = 8; // Use for logging after error
         }
     }
@@ -232,6 +252,88 @@ uint8_t _decode_byte_sample(tape_codec_t* tape_codec, bool* byte_found) {
     }
 
     return samples_consumed;
+}
+
+void _tape_recorder_decode_from_ticks(tape_recorder_t* recorder) {
+    if (recorder->data_value != recorder->previous_data_value) {
+        recorder->previous_data_value = recorder->data_value;
+
+        // Record the tick counts
+        tape_codec_t* tape_codec = &recorder->tape_codec;
+        if (tape_codec->pos < VG5000_MAX_CODEC_SIZE) {
+            tape_codec->ticks_buf[tape_codec->pos] = recorder->tick_counter;
+            tape_codec->pos++;
+        }
+        recorder->tick_counter = 0;
+
+        uint8_t samples_consumed = 0;
+
+        switch (tape_codec->state) {
+            case TAPE_INITIAL_SYNCHRO: {
+                bool synchro_found = false;
+                samples_consumed = _calibrate(tape_codec, &synchro_found);
+                if (synchro_found) {
+                    tape_codec->state = TAPE_HEADER_DATA;
+                }
+                break;
+            }
+            case TAPE_HEADER_DATA: {
+                bool byte_found = false;
+                samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
+                if (byte_found) {
+                    if (recorder->tape_index < recorder->tape.size) {
+                        recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
+                        recorder->tape_index++;
+                    }
+                    else {
+                        tape_codec->state = TAPE_ERROR;
+                        tape_codec->error = TAPE_ERROR_CODEC_DATA_TOO_LONG;
+                    }
+
+                    if (recorder->tape_index == 32) {
+                        tape_codec->state = TAPE_SECOND_SYNCHRO;
+                        tape_codec->current_byte = 0; // Prepare for next calibration
+                        tape_codec->bit_count = 0;
+                    }
+                }
+                break;
+            }
+            case TAPE_SECOND_SYNCHRO: {
+                bool synchro_found = false;
+                samples_consumed = _calibrate(tape_codec, &synchro_found);
+
+                if (synchro_found) {
+                    tape_codec->state = TAPE_PAYLOAD_DATA;
+                }
+                break;
+            }
+            case TAPE_PAYLOAD_DATA: {
+                bool byte_found = false;
+                samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
+                if (byte_found) {
+
+                    if (recorder->tape_index < recorder->tape.size) {
+                        recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
+                        recorder->tape_index++;
+                    }
+                    else {
+                        tape_codec->state = TAPE_ERROR;
+                        tape_codec->error = TAPE_ERROR_CODEC_DATA_TOO_LONG;
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        if (samples_consumed > 0) {
+            memmove(tape_codec->ticks_buf, tape_codec->ticks_buf + samples_consumed, (VG5000_MAX_CODEC_SIZE - samples_consumed) * sizeof(uint16_t));
+            tape_codec->pos -= samples_consumed;
+        }
+
+        recorder->soundin = (recorder->data_value)?0.5f:0.f;
+    }
 }
 
 uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uint64_t cpu_pins) {
@@ -251,92 +353,7 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
 
         // Tape Writing
         if (write_k7) {
-            if (recorder->data_value != recorder->previous_data_value) {
-                recorder->previous_data_value = recorder->data_value;
-
-                // Record the tick counts
-                tape_codec_t* tape_codec = &recorder->tape_codec;
-                if (tape_codec->pos < VG5000_MAX_CODEC_SIZE) {
-                    tape_codec->ticks_buf[tape_codec->pos] = recorder->tick_counter;
-                    tape_codec->pos++;
-                }
-                recorder->tick_counter = 0;
-
-                const uint16_t* ticks_buf = tape_codec->ticks_buf;
-                uint8_t samples_consumed = 0;
-
-                switch (tape_codec->state) {
-                    case TAPE_INITIAL_SYNCHRO: {
-                        bool synchro_found = false;
-                        // samples_consumed = _wait_for_synchro(tape_codec, &synchro_found);
-                        samples_consumed = _calibrate(tape_codec, &synchro_found);
-                        if (synchro_found) {
-                            tape_codec->state = TAPE_HEADER_DATA;
-                        }
-                        break;
-                    }
-                    case TAPE_HEADER_DATA: {
-                        bool byte_found = false;
-                        samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
-                        if (byte_found) {
-                            if (recorder->tape_index < recorder->tape.size) {
-                                recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
-                                recorder->tape_index++;
-                            }
-                            else {
-                                printf("Tape: data too long\n"); // TODO: return the error
-                                tape_codec->state = TAPE_ERROR;
-                            }
-
-                            if (recorder->tape_index == 32) {
-                                tape_codec->state = TAPE_SECOND_SYNCHRO;
-                                tape_codec->current_byte = 0; // Prepare for next calibration
-                                tape_codec->bit_count = 0;
-                            }
-                        }
-                        break;
-                    }
-                    case TAPE_SECOND_SYNCHRO: {
-                        bool synchro_found = false;
-                        samples_consumed = _calibrate(tape_codec, &synchro_found);
-
-                        if (synchro_found) {
-                            tape_codec->state = TAPE_PAYLOAD_DATA;
-                        }
-                        break;
-                    }
-                    case TAPE_PAYLOAD_DATA: {
-                        bool byte_found = false;
-                        samples_consumed = _decode_byte_sample(tape_codec, &byte_found);
-                        if (byte_found) {
-
-                            if (recorder->tape_index < recorder->tape.size) {
-                                recorder->tape.data[recorder->tape_index] = tape_codec->current_byte;
-                                recorder->tape_index++;
-                            }
-                            else {
-                                printf("Tape: data too long\n"); // TODO: return the error
-                                tape_codec->state = TAPE_ERROR;
-                            }
-                        }
-                        break;
-                    }
-                    case TAPE_ERROR: {
-                        // TODO: act on error
-                        tape_codec->state = TAPE_FINISHED;
-                        break;
-                    }
-                    default:
-                        break;
-                }
-
-                if (samples_consumed > 0) {
-                    memmove(tape_codec->ticks_buf, tape_codec->ticks_buf + samples_consumed, (VG5000_MAX_CODEC_SIZE - samples_consumed) * sizeof(uint16_t));
-                    tape_codec->pos -= samples_consumed;
-                }
-
-                recorder->soundin = (recorder->data_value)?0.5f:0.f;
-            }
+            _tape_recorder_decode_from_ticks(recorder);
         }
 
         // Tape Reading
@@ -361,8 +378,6 @@ uint64_t tape_recorder_tick(tape_recorder_t* recorder, uint64_t service_bus, uin
             // Automatic rewind for tape
             // TODO: make this an option.
             // TODO: validate the data on tape.
-            printf("\n");
-            printf("Tape: automatic rewind\n");
             memset(&recorder->tape_codec, 0, sizeof(recorder->tape_codec));
             recorder->tape_index = 0;
 
@@ -378,8 +393,8 @@ bool _read_tape_information(tape_recorder_t* recorder) {
 
     const size_t tape_data_size = recorder->tape.size;
     if (tape_data_size < 32) { // The must be at least a header
-        printf("Tape: too short\n");
-        return false; // TODO: explain the reason of the failure
+        recorder->error = TAPE_ERROR_INVALID_HEADER;
+        return false;
     }
 
     const uint8_t* data = recorder->tape.data;
@@ -387,8 +402,8 @@ bool _read_tape_information(tape_recorder_t* recorder) {
 
     for (int i = 0; i < 10; i++) {
         if (header[i] != 0xd3) {
-            printf("Tape: wrong 0xd3 part\n");
-            return false; // TODO: explain the reason of the failure
+            recorder->error = TAPE_ERROR_INVALID_HEADER_PREFIX;
+            return false;
         }
     }
 
@@ -409,28 +424,28 @@ bool _read_tape_information(tape_recorder_t* recorder) {
     tape_info->data_length = (header[29] << 8) | header[28];
     tape_info->checksum = (header[31] << 8) | header[30];
 
-    // Write the content of the header to stdout
-    printf("Format: %d\n", tape_info->format);
-    printf("Name: %s\n", tape_info->name);
-    printf("Version: %d\n", tape_info->version);
-    printf("Start Line: %s\n", tape_info->start_line);
-    printf("Protection: %d\n", tape_info->protection);
-    printf("Check Pos.: %04x\n", tape_info->check_pos);
-    printf("Start Adr.: %04x\n", tape_info->start_adr);
-    printf("Data Length: %d\n", tape_info->data_length);
-    printf("Checksum: %04x\n", tape_info->checksum);
+    // TODO: to displa on the debug UI
+    // printf("Format: %d\n", tape_info->format);
+    // printf("Name: %s\n", tape_info->name);
+    // printf("Version: %d\n", tape_info->version);
+    // printf("Start Line: %s\n", tape_info->start_line);
+    // printf("Protection: %d\n", tape_info->protection);
+    // printf("Check Pos.: %04x\n", tape_info->check_pos);
+    // printf("Start Adr.: %04x\n", tape_info->start_adr);
+    // printf("Data Length: %d\n", tape_info->data_length);
+    // printf("Checksum: %04x\n", tape_info->checksum);
 
     // Check that the following data is 10 times 0xd6
     for (int i = 0; i < 10; i++) {
         if (data[32 + i] != 0xd6) {
-            printf("Tape: wrong 0xd6 part\n");
-            return false; // TODO: explain the reason of the failure
+            recorder->error = TAPE_ERROR_INVALID_DATA_PREFIX;
+            return false;
         }
     }
 
     if (tape_data_size < (size_t)(32 + tape_info->data_length + 10)) {
-        printf("Tape: wrong total data length\n");
-        return false; // TODO: explain the reason of the failure
+        recorder->error = TAPE_ERROR_INVALID_DATA_SIZE;
+        return false;
     }
 
     return true;
