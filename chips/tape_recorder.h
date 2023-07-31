@@ -4,6 +4,9 @@
 
     Cassette recorder for VG5000µ.
 
+    TODO: support for the ASCII BASIC format
+    TODO: add a wave mode to record whatever is written (raw mode)
+
     Do this:
     ~~~C
     #define CHIPS_IMPL
