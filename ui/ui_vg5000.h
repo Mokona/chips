@@ -57,6 +57,7 @@ typedef struct {
     ui_memmap_t memmap;
     ui_memedit_t memedit[4];
     ui_memedit_t vmemedit;
+    ui_taperecorder_t tape_recorder;
     ui_dasm_t dasm[4];
     ui_dbg_t dbg;
     ui_snapshot_t snapshot;
@@ -117,6 +118,7 @@ static void _ui_vg5000_draw_menu(ui_vg5000_t* ui) {
             ImGui::MenuItem("Audio Output", 0, &ui->audio.open);
             ImGui::MenuItem("Z80 CPU", 0, &ui->cpu.open);
             ImGui::MenuItem("EF9345 VDP", 0, &ui->vdp.open);
+            ImGui::MenuItem("Tape recorder", 0, &ui->tape_recorder.open);
             ImGui::Checkbox("Audible Tape", &ui->vg5000->tape.audible_tape);
             ImGui::EndMenu();
         }
@@ -374,6 +376,14 @@ void ui_vg5000_init(ui_vg5000_t* ui, const ui_vg5000_desc_t* ui_desc) {
         desc.max_addr = 0x2000;
         ui_memedit_init(&ui->vmemedit, &desc);
     }
+    x += dx; y += dy;
+    {
+        ui_taperecorder_desc_t desc = {0};
+        desc.title = "Tape Recorder";
+        desc.x = x;
+        desc.y = y;
+        ui_taperecorder_init(&ui->tape_recorder, &desc);
+    }
 }
 
 void ui_vg5000_discard(ui_vg5000_t* ui) {
@@ -384,6 +394,7 @@ void ui_vg5000_discard(ui_vg5000_t* ui) {
     ui_audio_discard(&ui->audio);
     ui_kbd_discard(&ui->kbd);
     ui_memmap_discard(&ui->memmap);
+    ui_taperecorder_discard(&ui->tape_recorder);
     for (int i = 0; i < 4; i++) {
         ui_memedit_discard(&ui->memedit[i]);
         ui_dasm_discard(&ui->dasm[i]);
@@ -404,6 +415,7 @@ void ui_vg5000_draw(ui_vg5000_t* ui) {
     ui_ef9345_draw(&ui->vdp);
     ui_kbd_draw(&ui->kbd);
     ui_memmap_draw(&ui->memmap);
+    ui_taperecorder_draw(&ui->tape_recorder);
     for (int i = 0; i < 4; i++) {
         ui_memedit_draw(&ui->memedit[i]);
         ui_dasm_draw(&ui->dasm[i]);
