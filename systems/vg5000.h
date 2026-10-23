@@ -40,6 +40,21 @@ extern "C" {
 #define VG5000_FREQUENCY (4000000)
 #define VDP_TICKS_PER_CPU_TICK (EF9345_FREQUENCY / VG5000_FREQUENCY)
 
+// k7 file format, a file holds one or several blocks
+#define VG5000_K7_HEADER_SYNC_BYTE (0xD3)
+#define VG5000_K7_DATA_SYNC_BYTE (0xD6)
+#define VG5000_K7_SYNC_SIZE (10)
+#define VG5000_K7_HEADER_SIZE (32)
+#define VG5000_K7_LENGTH_OFFSET (28)
+#define VG5000_K7_DATA_OFFSET (42)
+
+// tape signal, durations in CPU ticks
+#define VG5000_TAPE_SHORT_TICKS (833)
+#define VG5000_TAPE_LONG_TICKS (1666)
+#define VG5000_TAPE_HEADER_SYNC (30000)
+#define VG5000_TAPE_DATA_SYNC (7200)
+#define VG5000_TAPE_SILENCE_TICKS (2000000) // silence before a block, as CSAVE does (0.5s)
+
 // signals decoded by 7807 (I/O port decoder)
 #define SERVICE_BUS_PIN_RKY 0
 #define SERVICE_BUS_PIN_RK7 1
@@ -112,8 +127,8 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds);
 void vg5000_key_down(vg5000_t* sys, int key_code);
 // send a key-up event
 void vg5000_key_up(vg5000_t* sys, int key_code);
-// insert a tape of uint16_t pulse durations in ticks
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data);
+// insert a tape with the content of a .k7 file, return false if it's not a k7 or it doesn't fit on tape
+bool vg5000_insert_k7(vg5000_t* sys, chips_range_t data);
 // remove the tape (reacts as a blank tape)
 void vg5000_remove_tape(vg5000_t* sys);
 // press or release the REC button of the tape deck
@@ -464,24 +479,123 @@ void vg5000_triangle_key_pressed(vg5000_t* sys) {
     sys->nmi = true;
 }
 
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data) {
+// return the size of the k7 block at pos, its trailing zeros included, or 0 if there's no valid block
+static size_t _vg5000_k7_block_size(const uint8_t* k7, size_t k7_size, size_t pos) {
+    if ((k7_size - pos) < VG5000_K7_DATA_OFFSET) {
+        return 0;
+    }
+    for (size_t i = 0; i < VG5000_K7_SYNC_SIZE; i += 1) {
+        if (k7[pos + i] != VG5000_K7_HEADER_SYNC_BYTE) {
+            return 0;
+        }
+        if (k7[pos + VG5000_K7_HEADER_SIZE + i] != VG5000_K7_DATA_SYNC_BYTE) {
+            return 0;
+        }
+    }
+    const size_t length = k7[pos + VG5000_K7_LENGTH_OFFSET] | (k7[pos + VG5000_K7_LENGTH_OFFSET + 1] << 8);
+    size_t end = pos + VG5000_K7_DATA_OFFSET + length;
+    if (end > k7_size) {
+        return 0;
+    }
+    while ((end < k7_size) && (k7[end] == 0)) {
+        end += 1;
+    }
+    return end - pos;
+}
+
+static size_t _vg5000_k7_put_impulse(tape_deck_t* deck, uint32_t half_period_ticks) {
+    if (deck) {
+        tape_deck_add_pulse(deck, true, half_period_ticks);
+        tape_deck_add_pulse(deck, false, half_period_ticks);
+    }
+    return 2;
+}
+
+// end of byte: 4 short impulses then a long one
+static size_t _vg5000_k7_put_end_of_byte(tape_deck_t* deck) {
+    size_t num_pulses = 0;
+    for (int i = 0; i < 4; i += 1) {
+        num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_SHORT_TICKS);
+    }
+    num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_LONG_TICKS);
+    return num_pulses;
+}
+
+// bits from the lowest, 1 is two short impulses, 0 is a long impulse
+static size_t _vg5000_k7_put_byte(tape_deck_t* deck, uint8_t byte) {
+    size_t num_pulses = 0;
+    for (int bit = 0; bit < 8; bit += 1) {
+        if (byte & 1) {
+            num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_SHORT_TICKS);
+            num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_SHORT_TICKS);
+        }
+        else {
+            num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_LONG_TICKS);
+        }
+        byte >>= 1;
+    }
+    num_pulses += _vg5000_k7_put_end_of_byte(deck);
+    return num_pulses;
+}
+
+static size_t _vg5000_k7_put_sync(tape_deck_t* deck, int num_impulses) {
+    size_t num_pulses = 0;
+    for (int i = 0; i < num_impulses; i += 1) {
+        num_pulses += _vg5000_k7_put_impulse(deck, VG5000_TAPE_SHORT_TICKS);
+    }
+    num_pulses += _vg5000_k7_put_end_of_byte(deck);
+    return num_pulses;
+}
+
+// a block is a silence, a sync tone and the header, then a sync tone and the rest of the block
+static size_t _vg5000_k7_put_block(tape_deck_t* deck, const uint8_t* block, size_t block_size) {
+    size_t num_pulses = 1;
+    if (deck) {
+        tape_deck_add_pulse(deck, false, VG5000_TAPE_SILENCE_TICKS);
+    }
+    num_pulses += _vg5000_k7_put_sync(deck, VG5000_TAPE_HEADER_SYNC);
+    for (size_t i = 0; i < VG5000_K7_HEADER_SIZE; i += 1) {
+        num_pulses += _vg5000_k7_put_byte(deck, block[i]);
+    }
+    num_pulses += _vg5000_k7_put_sync(deck, VG5000_TAPE_DATA_SYNC);
+    for (size_t i = VG5000_K7_HEADER_SIZE; i < block_size; i += 1) {
+        num_pulses += _vg5000_k7_put_byte(deck, block[i]);
+    }
+    return num_pulses;
+}
+
+bool vg5000_insert_k7(vg5000_t* sys, chips_range_t data) {
     CHIPS_ASSERT(sys && sys->valid && data.ptr);
 
     // the tape cannot be changed while recording
     if (tape_deck_is_recording(&sys->tape_deck)) {
         return false;
     }
-    const size_t num_pulses = data.size / sizeof(uint16_t);
-    if (num_pulses > TAPE_DECK_MAX_PULSES) {
+
+    // check the blocks and count the pulses, what follows the last valid block is ignored
+    const uint8_t* k7 = (const uint8_t*)data.ptr;
+    size_t k7_size = 0;
+    size_t num_pulses = 0;
+    while (k7_size < data.size) {
+        const size_t block_size = _vg5000_k7_block_size(k7, data.size, k7_size);
+        if (block_size == 0) {
+            break;
+        }
+        num_pulses += _vg5000_k7_put_block(0, &k7[k7_size], block_size);
+        k7_size += block_size;
+    }
+    if ((k7_size == 0) || (num_pulses > TAPE_DECK_MAX_PULSES)) {
         return false;
     }
 
     tape_deck_eject(&sys->tape_deck);
-    const uint16_t* pulses = (const uint16_t*)data.ptr;
-    for (size_t i = 0; i < num_pulses; i += 1) {
-        const bool level = (i & 1) != 0;
-        tape_deck_add_pulse(&sys->tape_deck, level, pulses[i]);
+    size_t pos = 0;
+    while (pos < k7_size) {
+        const size_t block_size = _vg5000_k7_block_size(k7, k7_size, pos);
+        _vg5000_k7_put_block(&sys->tape_deck, &k7[pos], block_size);
+        pos += block_size;
     }
+    CHIPS_ASSERT(sys->tape_deck.num_pulses == num_pulses);
     return true;
 }
 
