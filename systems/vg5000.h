@@ -33,14 +33,20 @@ extern "C" {
 #endif
 
 // bump this whenever the vg5000_t struct layout changes
-#define VG5000_SNAPSHOT_VERSION (0x0001)
+#define VG5000_SNAPSHOT_VERSION (0x0002)
 
-//#define VG5000_MAX_TAPE_SIZE (1<<16)
-#define VG5000_MAX_TAPE_SIZE (1500000) // TODO: replace by a callback to application to ask for tape content
 #define VG5000_MAX_AUDIO_SAMPLES (1024)
 #define VG5000_DEFAULT_AUDIO_SAMPLES (880)
 #define VG5000_FREQUENCY (4000000)
 #define VDP_TICKS_PER_CPU_TICK (EF9345_FREQUENCY / VG5000_FREQUENCY)
+
+// signals decoded by 7807 (I/O port decoder)
+#define SERVICE_BUS_PIN_RKY 0
+#define SERVICE_BUS_PIN_RK7 1
+#define SERVICE_BUS_PIN_WK7 2
+#define SERVICE_BUS_MASK_RKY (1ULL << SERVICE_BUS_PIN_RKY)
+#define SERVICE_BUS_MASK_RK7 (1ULL << SERVICE_BUS_PIN_RK7)
+#define SERVICE_BUS_MASK_WK7 (1ULL << SERVICE_BUS_PIN_WK7)
 
 // VG5000µ models
 // TODO: useful or redondant with ROM images?
@@ -78,17 +84,9 @@ typedef struct {
         int sample_pos;
         float sample_buffer[VG5000_MAX_AUDIO_SAMPLES];
     } audio;
-    struct {
-        uint32_t size;           // tape_size is > 0 if a tape is inserted
-        uint32_t pos;
-        uint16_t tick_counter;   // count of ticks since the latest value change
-        bool remote;        // calue of Remote control data
-        bool data_value;    // value of latest Data
-        bool previous_data_value;
-        bool audible_tape;
-        uint16_t ticks_buf[VG5000_MAX_TAPE_SIZE];  // records the ticks
-    } tape;
-    tape_recorder_t tape_recorder;
+    tape_deck_t tape_deck;
+    uint64_t tape_pins;     // MOTOR and WRITE latched from the tape port, REC from the deck button
+    bool audible_tape;
     uint64_t cpu_pins;
     uint64_t vdp_pins;
     uint64_t service_bus;
@@ -114,10 +112,12 @@ uint32_t vg5000_exec(vg5000_t* sys, uint32_t micro_seconds);
 void vg5000_key_down(vg5000_t* sys, int key_code);
 // send a key-up event
 void vg5000_key_up(vg5000_t* sys, int key_code);
-// insert a tape for loading/saving (must be an VG5000µ .K7 file)
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data, chips_range_t k7_file_data);
-// remove tape
+// insert a tape of uint16_t pulse durations in ticks
+bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data);
+// remove the tape (reacts as a blank tape)
 void vg5000_remove_tape(vg5000_t* sys);
+// press or release the REC button of the tape deck
+void vg5000_tape_rec(vg5000_t* sys, bool pressed);
 // load a VG5000µ file into the emulator
 bool vg5000_quickload(vg5000_t* sys, chips_range_t data);
 // save the VG5000µ state
@@ -175,12 +175,11 @@ void vg5000_init(vg5000_t* sys, const vg5000_desc_t* desc)
     });
 
     // Tape
-    sys->tape.audible_tape = desc->audible_tape;
-    sys->tape.tick_counter = 0;
-    sys->tape.previous_data_value = 0;
-    sys->tape.size = 1<<16; // There's always a tape available. Even if not inserted. It's just blank (and small)
-
-    tape_recorder_init(&sys->tape_recorder);
+    sys->audible_tape = desc->audible_tape;
+    tape_deck_init(&sys->tape_deck, &(tape_deck_desc_t){
+        .tick_hz = VG5000_FREQUENCY,
+        .auto_rewind = true,
+    });
 }
 
 void vg5000_discard(vg5000_t* sys)
@@ -199,9 +198,8 @@ void vg5000_reset(vg5000_t* sys)
     sys->audio.soundin = 0.f;
     beeper_reset(&sys->beeper);
 
-    // Tape
-    sys->tape.tick_counter = 0;
-    sys->tape.previous_data_value = 0;
+    // Tape (reset pings)
+    sys->tape_pins &= ~(TAPE_DECK_MOTOR | TAPE_DECK_WRITE);
 
     _vg5000_init_memory_map(sys);
 }
@@ -331,64 +329,38 @@ uint64_t _vg5000_keyboard_tick(vg5000_t* sys, uint64_t cpu_pins) {
 
 uint64_t _vg5000_audio_tape_tick(vg5000_t* sys, uint64_t cpu_pins) {
     const bool write_k7 = (sys->service_bus & SERVICE_BUS_MASK_WK7) == 0;
-    const bool read_k7 = (sys->service_bus & SERVICE_BUS_MASK_RK7) == 0;
     if (write_k7) {
-        sys->audio.soundin = (Z80_GET_DATA(cpu_pins) & 0b1000) ? 0.5f : 0.f;
-        sys->tape.data_value = (Z80_GET_DATA(cpu_pins) & 0b0001);
-    }
-    if (write_k7 || read_k7) {
-        sys->tape.remote = (Z80_GET_DATA(cpu_pins) & 0b0010);
-    }
-
-    if (sys->tape.remote && sys->tape.size > 0) {
-        sys->tape.tick_counter++;
-
-        // Tape Writing
-        if (write_k7) {
-            if (sys->tape.data_value != sys->tape.previous_data_value) {
-                sys->tape.previous_data_value = sys->tape.data_value;
-
-                if (sys->tape.pos < sys->tape.size) {
-                    sys->tape.ticks_buf[sys->tape.pos] = sys->tape.tick_counter;
-                    sys->tape.pos++;
-                }
-                sys->tape.tick_counter = 0;
-
-                sys->audio.soundin = (sys->tape.audible_tape&&sys->tape.data_value)?0.5f:0.f;
-            }
+        const uint8_t data = Z80_GET_DATA(cpu_pins);
+        sys->audio.soundin = (data & 0b1000) ? 0.5f : 0.f;
+        sys->tape_pins &= ~(TAPE_DECK_MOTOR | TAPE_DECK_WRITE);
+        if (data & 0b0010) {
+            sys->tape_pins |= TAPE_DECK_MOTOR;
         }
-
-        // Tape Reading
-        if (read_k7) {
-            if (sys->tape.pos < sys->tape.size) {
-                cpu_pins &= ~Z80_D7;
-                cpu_pins |= sys->tape.data_value?Z80_D7:0;
-
-                if (sys->tape.tick_counter >= sys->tape.ticks_buf[sys->tape.pos]) {
-                    sys->tape.tick_counter -= sys->tape.ticks_buf[sys->tape.pos];
-                    sys->tape.pos++;
-                    sys->tape.data_value = !sys->tape.data_value;
-                    sys->audio.soundin = (sys->tape.audible_tape&&sys->tape.data_value)?0.5f:0.f;
-                }
-            }
-        }
-    }
-    else {
-        if (!sys->tape.remote && sys->tape.pos > 0) {
-            // Automatic rewind for tape
-            // TODO: make this an option -> and maybe when the tape is toward the end to allow multiple consecutive loads
-            sys->tape.pos = 0;
-            sys->tape.tick_counter = 0;
-            sys->tape.data_value = 0;
+        if (data & 0b0001) {
+            sys->tape_pins |= TAPE_DECK_WRITE;
         }
     }
 
-    cpu_pins = tape_recorder_tick(&sys->tape_recorder, sys->service_bus, cpu_pins);
-    // sys->audio.soundin = (sys->tape.audible_tape&&sys->tape_recorder.data_value)?0.5f:0.f; // TODO: activate when new system in place
+    sys->tape_pins = tape_deck_tick(&sys->tape_deck, sys->tape_pins);
 
+    // Tape port read: bit 7 is the tape signal
+    const bool read_k7 = (sys->service_bus & SERVICE_BUS_MASK_RK7) == 0;
+    if (read_k7) {
+        cpu_pins &= ~Z80_D7;
+        if (sys->tape_pins & TAPE_DECK_READ) {
+            cpu_pins |= Z80_D7;
+        }
+    }
 
-    // Audio
-    beeper_set(&sys->beeper, sys->audio.soundin);
+    // Tape signal is mixed with the sound output
+    float sound = sys->audio.soundin;
+    if (sys->audible_tape && tape_deck_is_motor_on(&sys->tape_deck)) {
+        const uint64_t tape_level_pin = tape_deck_is_recording(&sys->tape_deck) ? TAPE_DECK_WRITE : TAPE_DECK_READ;
+        if (sys->tape_pins & tape_level_pin) {
+            sound = 0.5f;
+        }
+    }
+    beeper_set(&sys->beeper, sound);
     if (beeper_tick(&sys->beeper)) {
         // new audio sample ready
         sys->audio.sample_buffer[sys->audio.sample_pos++] = sys->beeper.sample;
@@ -492,28 +464,41 @@ void vg5000_triangle_key_pressed(vg5000_t* sys) {
     sys->nmi = true;
 }
 
-bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data, chips_range_t k7_file_data) {
-    CHIPS_ASSERT(sys && sys->valid);
+bool vg5000_insert_tape(vg5000_t* sys, chips_range_t data) {
+    CHIPS_ASSERT(sys && sys->valid && data.ptr);
 
-    if (data.size > VG5000_MAX_TAPE_SIZE) {
+    // the tape cannot be changed while recording
+    if (tape_deck_is_recording(&sys->tape_deck)) {
+        return false;
+    }
+    const size_t num_pulses = data.size / sizeof(uint16_t);
+    if (num_pulses > TAPE_DECK_MAX_PULSES) {
         return false;
     }
 
-    memcpy(sys->tape.ticks_buf, data.ptr, data.size);
-    sys->tape.size = data.size;
-    sys->tape.pos = 0;
-    sys->tape.tick_counter = 0;
-    sys->tape.data_value = 0;
-
-    tape_recorder_eject_tape(&sys->tape_recorder);
-
-    return tape_recorder_insert_tape(&sys->tape_recorder, k7_file_data);
+    tape_deck_eject(&sys->tape_deck);
+    const uint16_t* pulses = (const uint16_t*)data.ptr;
+    for (size_t i = 0; i < num_pulses; i += 1) {
+        const bool level = (i & 1) != 0;
+        tape_deck_add_pulse(&sys->tape_deck, level, pulses[i]);
+    }
+    return true;
 }
 
 void vg5000_remove_tape(vg5000_t* sys) {
     CHIPS_ASSERT(sys && sys->valid);
-    sys->tape.size = 0;
-    sys->tape.pos = 0;
+    // the tape cannot be changed while recording
+    if (!tape_deck_is_recording(&sys->tape_deck)) {
+        tape_deck_eject(&sys->tape_deck);
+    }
+}
+
+void vg5000_tape_rec(vg5000_t* sys, bool pressed) {
+    CHIPS_ASSERT(sys && sys->valid);
+    sys->tape_pins &= ~TAPE_DECK_REC;
+    if (pressed) {
+        sys->tape_pins |= TAPE_DECK_REC;
+    }
 }
 
 
